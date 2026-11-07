@@ -109,6 +109,7 @@ export function createBarChart(container, opts) {
       const rect = svgEl('rect', {
         class: 'chart-bar', x: cx - bw / 2, y, width: bw, height: bh, rx: Math.min(7, bw / 2),
       }, svg);
+      rect.style.setProperty('--i', String(i));
       bars.push({ rect, cx, y });
       const label = svgEl('text', { class: 'chart-axis', x: cx, y: h - 6, 'text-anchor': 'middle' }, svg);
       label.textContent = p.short;
@@ -173,6 +174,11 @@ export function createBarChart(container, opts) {
     const changed = next !== selected;
     selected = next;
     applySelection(drawn);
+    if (changed) {
+      tip.classList.remove('is-popping');
+      void tip.offsetWidth;
+      tip.classList.add('is-popping');
+    }
     if (focus) buttons[selected]?.focus();
     if (changed && notify) opts.onSelect(selected);
   }
@@ -210,11 +216,14 @@ export function createBarChart(container, opts) {
   ro.observe(container);
 
   return {
-    update(newSeries, newSelected, newMode) {
+    update(newSeries, newSelected, newMode, grow = false) {
       series = newSeries;
       mode = newMode;
       selected = newSelected;
       render();
+      // Bars rise from the baseline on first draw and when the period changes.
+      svg.classList.remove('is-growing');
+      if (grow) { void svg.getBoundingClientRect(); svg.classList.add('is-growing'); }
       lastWidth = container.clientWidth;
       drawn = true;
     },

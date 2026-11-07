@@ -102,7 +102,11 @@
           <span class="ico search-ico" data-icon="search"></span>
           <input id="tx-search" type="search" placeholder="Search notes or categories" autocomplete="off" enterkeyhint="search">
         </div>
-        <div class="chips-row" id="tx-filters" role="group" aria-label="Filter transactions"></div>
+        <div class="chips-wrap" id="tx-filters-wrap">
+          <button type="button" class="chips-arrow chips-arrow-left" data-dir="-1" aria-label="Scroll filters left" tabindex="-1"><span class="ico" data-icon="chevronLeft"></span></button>
+          <div class="chips-row" id="tx-filters" role="group" aria-label="Filter transactions"></div>
+          <button type="button" class="chips-arrow chips-arrow-right" data-dir="1" aria-label="Scroll filters right" tabindex="-1"><span class="ico" data-icon="chevronRight"></span></button>
+        </div>
         <p class="result-count" id="tx-count" role="status"></p>
         <div id="tx-groups"></div>
       </section>
@@ -198,6 +202,7 @@
   </div>
 
   <nav class="tabbar" aria-label="Main">
+    <span class="tab-indicator" aria-hidden="true"></span>
     <a href="#home" class="tab" data-tab="home"><span class="ico" data-icon="home"></span><span class="tab-label">Home</span></a>
     <a href="#transactions" class="tab" data-tab="transactions"><span class="ico" data-icon="list"></span><span class="tab-label">Transactions</span></a>
     <a href="#budgets" class="tab" data-tab="budgets"><span class="ico" data-icon="pie"></span><span class="tab-label">Budgets</span></a>

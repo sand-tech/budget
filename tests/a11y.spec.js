@@ -125,14 +125,17 @@ test('transitions stay within 150–250ms', async ({ page }) => {
     const read = (sel) => getComputedStyle(document.querySelector(sel)).transitionDuration.split(',').map((d) => parseFloat(d) * 1000);
     return { tab: read('.tab'), seg: read('#period-seg button'), bar: read('.chart-bar') };
   });
-  for (const list of Object.values(durations)) for (const d of list) {
+  // 0s entries are instant switches (e.g. the pill colour that lands after the sliding thumb).
+  for (const list of Object.values(durations)) for (const d of list.filter((x) => x > 0)) {
     expect(d).toBeGreaterThanOrEqual(150);
     expect(d).toBeLessThanOrEqual(250);
   }
 });
 
 test('the contrast checker itself catches low-contrast text', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await freshPage(page);
+  await page.waitForFunction(() => !document.querySelector('.screen.is-entering'));
   await page.evaluate(() => {
     const p = document.createElement('p');
     p.textContent = 'too light';

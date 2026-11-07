@@ -7,7 +7,7 @@ import {
 import {
   h, icon, hydrateIcons, trendChip, catTile, txTile, emptyState, fitText, countUp,
   openDialog, closeDialog, wireDialog, confirmAction, showToast, hideToast, wireToast, setFieldError,
-  wireSwipe, closeOpenRows,
+  wireSwipe, closeOpenRows, initSegThumb, wireScrollRow, replay, reducedMotion, wait,
 } from './ui.js';
 import { createBarChart } from './chart.js';
 
@@ -21,6 +21,9 @@ const ui = {
   firstHome: true,       // count-up only on first load
   txQuery: '',
   txFilter: 'all',
+  prevKpi: {},           // last KPI values, to animate changes
+  highlightId: null,     // transaction to flash after add/edit/undo
+  alertCount: null,
 };
 
 const data = () => state.getData();
@@ -35,6 +38,7 @@ function route() {
   show(SCREENS.includes(name) ? name : 'home');
 }
 
+let enterTimer = null;
 function show(name) {
   if (name === ui.screen) return;
   const prev = ui.screen;
@@ -42,13 +46,28 @@ function show(name) {
   for (const s of SCREENS) {
     const el = $(`screen-${s}`);
     el.hidden = s !== name;
-    el.classList.toggle('is-entering', s === name && prev !== null);
+    el.classList.toggle('is-entering', s === name);
   }
+  // Stagger-in only plays on arrival; later re-renders shouldn't replay it.
+  clearTimeout(enterTimer);
+  enterTimer = setTimeout(() => $(`screen-${name}`).classList.remove('is-entering'), 900);
   document.querySelectorAll('.tab').forEach((tab) => {
     if (tab.dataset.tab === name) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   });
+  moveTabIndicator(prev !== null);
   if (prev !== null) window.scrollTo(0, 0);
+}
+
+function moveTabIndicator(animate = true) {
+  const tab = document.querySelector('.tab[aria-current="page"]');
+  const ind = document.querySelector('.tab-indicator');
+  if (!tab || !ind) return;
+  if (!animate) ind.style.transition = 'none';
+  ind.style.width = `${tab.offsetWidth}px`;
+  ind.style.transform = `translateX(${tab.offsetLeft}px)`;
+  ind.classList.add('is-ready');
+  if (!animate) requestAnimationFrame(() => { ind.style.transition = ''; });
 }
 
 /* ====================================================================
@@ -72,7 +91,7 @@ function renderHome() {
   $('home-subtitle').textContent = `Your money in ${k.period.long}`;
   $('sample-banner').hidden = !state.hasSample(d);
   renderKpis(k);
-  renderOverview();
+  renderOverview(ui.firstHome);
   renderTopCategories(k.period);
   renderRecent(today);
   ui.firstHome = false;
@@ -97,18 +116,23 @@ function renderKpis(k) {
         h('a', { class: 'kpi-details', href: def.href, dataset: def.filter ? { filter: def.filter } : {}, 'aria-label': `View ${def.label} details` },
           'View details', h('span', { 'aria-hidden': 'true' }, ' ↗'))),
     );
-    return { card, valueEl, visible, raw, display, isRate: def.isRate };
+    return { key: def.key, card, valueEl, visible, raw, display, isRate: def.isRate };
   });
   grid.replaceChildren(...cards.map((c) => c.card));
   for (const c of cards) {
     fitText(c.valueEl);
-    if (ui.firstHome && typeof c.raw === 'number') {
-      const to = c.isRate ? Math.round(c.raw * 1000) : c.raw;
+    // First load counts up from 0; later changes glide from the old value.
+    const from = ui.firstHome ? 0 : ui.prevKpi[c.key];
+    if (typeof c.raw === 'number' && typeof from === 'number' && from !== c.raw) {
+      const scale = c.isRate ? 1000 : 1;
+      const to = Math.round(c.raw * scale);
       countUp(to, (v) => {
-        c.visible.textContent = c.display(c.isRate ? v / 1000 : v);
+        c.visible.textContent = c.display(v / scale);
         if (v === to) { c.visible.textContent = c.display(c.raw); fitText(c.valueEl); }
-      });
+      }, ui.firstHome ? 700 : 450, Math.round(from * scale));
+      if (!ui.firstHome) replay(c.card, 'is-updated');
     }
+    ui.prevKpi[c.key] = c.raw;
   }
 }
 
@@ -116,14 +140,14 @@ function renderKpis(k) {
 let chart;
 const UNIT = { week: 'week', month: 'month', year: 'year' };
 
-function renderOverview() {
+function renderOverview(grow = false) {
   const s = state.series(data(), ui.mode, new Date());
   let sel = ui.selected[ui.mode];
   if (sel === undefined || sel >= s.length) sel = s.length - 1;
   ui.selected[ui.mode] = sel;
   ui.series = s;
   updateOverviewText();
-  chart.update(s, sel, ui.mode);
+  chart.update(s, sel, ui.mode, grow);
   document.querySelectorAll('#period-seg button').forEach((b) => {
     b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode));
   });
@@ -186,7 +210,7 @@ function renderRecent(today) {
     list.replaceChildren(h('li', {}, homeEmpty('No transactions yet', 'Track your first expense or income to get started.')));
     return;
   }
-  list.replaceChildren(...recent.map((tx) => h('li', {}, txTile(tx, {
+  list.replaceChildren(...recent.map((tx) => h('li', { class: tx.id === ui.highlightId ? 'is-new' : '' }, txTile(tx, {
     category: state.getCategory(tx.categoryId),
     money: fmt,
     dayText: dayLabel(tx.date, today),
@@ -228,6 +252,10 @@ function renderTransactions() {
     }, f.icon ? icon(f.icon) : null, f.label)));
   }
   chips.querySelectorAll('.filter-chip').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.filter === ui.txFilter)));
+  if (ui.revealedFilter !== ui.txFilter && chipRow) {
+    ui.revealedFilter = ui.txFilter;
+    requestAnimationFrame(() => chipRow.reveal(chips.querySelector('.filter-chip[aria-pressed="true"]')));
+  }
 
   const search = $('tx-search');
   if (search.value !== ui.txQuery) search.value = ui.txQuery;
@@ -272,7 +300,7 @@ function renderTransactions() {
 function swipeRow(tx, today) {
   const category = state.getCategory(tx.categoryId);
   const title = tx.note || category?.name || 'transaction';
-  return h('div', { class: 'swipe', dataset: { id: tx.id } },
+  return h('div', { class: `swipe${tx.id === ui.highlightId ? ' is-new' : ''}`, dataset: { id: tx.id } },
     h('div', { class: 'swipe-actions' },
       h('button', { type: 'button', class: 'swipe-btn swipe-edit', 'aria-label': `Edit ${title}`, onclick: () => openTxSheet(tx) },
         icon('pencil'), 'Edit'),
@@ -295,6 +323,13 @@ async function deleteFlow(tx) {
     closeOpenRows($('tx-groups'));
     return;
   }
+  // Slide the row out and collapse the gap before removing it.
+  const li = $('tx-groups').querySelector(`.swipe[data-id="${CSS.escape(tx.id)}"]`)?.closest('li');
+  if (li && !reducedMotion()) {
+    li.style.height = `${li.offsetHeight}px`;
+    li.classList.add('is-leaving');
+    await wait(260);
+  }
   const token = state.deleteTx(tx.id);
   if (!token) return;
   showToast('Transaction deleted', {
@@ -307,7 +342,9 @@ async function deleteFlow(tx) {
   $('tx-search').focus({ preventScroll: true });
 }
 
+let chipRow = null;
 function wireTransactions() {
+  chipRow = wireScrollRow($('tx-filters-wrap'));
   $('tx-search').addEventListener('input', (e) => {
     ui.txQuery = e.target.value.slice(0, 100);
     renderTransactions();
@@ -404,6 +441,7 @@ function wireBudgets() {
     const r = parseAmount($('budget-input').value);
     if (!r.ok) {
       setFieldError($('budget-input-error'), r.error, $('budget-input'));
+      replay($('budget-form').querySelector('.amount-wrap'), 'is-shaking');
       $('budget-input').focus();
       return;
     }
@@ -535,7 +573,11 @@ function wireSettings() {
   $('set-startday').addEventListener('change', (e) => { state.updateSettings({ startDay: Number(e.target.value) }); });
   $('theme-seg').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-theme-value]');
-    if (b) state.updateSettings({ theme: b.dataset.themeValue });
+    if (!b || b.dataset.themeValue === data().settings.theme) return;
+    const apply = () => state.updateSettings({ theme: b.dataset.themeValue });
+    // Cross-fade the whole app between themes where the browser supports it.
+    if (document.startViewTransition && !reducedMotion()) document.startViewTransition(apply);
+    else apply();
   });
 
   $('export-btn').addEventListener('click', exportCsv);
@@ -597,6 +639,8 @@ function alerts() {
 
 function renderBell() {
   const list = alerts();
+  if (ui.alertCount !== null && list.length > ui.alertCount) replay($('bell-btn'), 'is-ringing');
+  ui.alertCount = list.length;
   $('bell-dot').hidden = list.length === 0;
   $('bell-btn').setAttribute('aria-label', list.length ? `Notifications, ${list.length} new` : 'Notifications, none');
   $('notif-list').replaceChildren(...(list.length
@@ -665,6 +709,8 @@ function submitTx(e) {
     setFieldError($('tx-category-error'), er.category);
     setFieldError($('tx-date-error'), er.date, $('tx-date'));
     setFieldError($('tx-note-error'), er.note, $('tx-note'));
+    if (er.amount) replay(form.querySelector('.amount-wrap'), 'is-shaking');
+    if (er.category) replay($('tx-cat-grid'), 'is-shaking');
     const first = er.amount ? $('tx-amount')
       : er.category ? form.querySelector('input[name="category"]')
         : er.date ? $('tx-date') : $('tx-note');
@@ -708,7 +754,9 @@ function renderNotice() {
   el.textContent = problem ? NOTICES[problem] : '';
 }
 
-function renderAll() {
+function renderAll(change) {
+  // Flash the row that was just added, edited or restored.
+  ui.highlightId = change && ['add', 'update', 'restore'].includes(change.type) ? change.tx.id : null;
   renderNotice();
   renderHome();
   renderTransactions();
@@ -727,7 +775,8 @@ function wire() {
     const b = e.target.closest('button[data-mode]');
     if (!b || b.dataset.mode === ui.mode) return;
     ui.mode = b.dataset.mode;
-    renderOverview();
+    renderOverview(true);
+    replay($('overview-total'), 'is-swapping');
   });
 
   // "View details" links can pre-set the transactions filter.
@@ -762,9 +811,12 @@ function boot() {
     axisMoney: (c) => money(c, currency(), { compact: true }),
     onSelect: (i) => { ui.selected[ui.mode] = i; updateOverviewText(); },
   });
+  document.querySelectorAll('.seg').forEach((seg) => initSegThumb(seg));
   wire();
   route();
   renderAll();
+  window.addEventListener('resize', () => moveTabIndicator(false));
+  document.fonts?.ready.then(() => moveTabIndicator(false));
   state.subscribe(renderAll);
   requestPersistence().then((granted) => { ui.persisted = granted; renderSettings(); });
   // Follow the system theme live when "System" is chosen.

@@ -136,6 +136,41 @@ test.describe('transactions screen', () => {
     await expect(page.locator('#toast')).toBeHidden({ timeout: 2500 });
   });
 
+  test('filter chips slide sideways with mouse drag and wheel', async ({ page }) => {
+    await freshPage(page);
+    await openScreen(page, 'transactions');
+    const row = page.locator('#tx-filters');
+    const scroll = () => row.evaluate((el) => el.scrollLeft);
+    expect(await row.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+    await expect(page.locator('#tx-filters-wrap')).toHaveClass(/can-right/);
+
+    // Drag left with the mouse
+    const box = await row.boundingBox();
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width - 40, y);
+    await page.mouse.down();
+    for (let i = 1; i <= 10; i++) await page.mouse.move(box.x + box.width - 40 - i * 20, y);
+    await page.mouse.up();
+    expect(await scroll()).toBeGreaterThan(100);
+    await expect(page.locator('#tx-filters-wrap')).toHaveClass(/can-left/);
+    // The drag didn't select the chip under the pointer
+    await expect(page.locator('.filter-chip[data-filter="all"]')).toHaveAttribute('aria-pressed', 'true');
+
+    // Mouse wheel scrolls it too
+    await row.evaluate((el) => { el.scrollLeft = 0; });
+    await page.mouse.move(box.x + 100, y);
+    await page.mouse.wheel(0, 200);
+    await expect.poll(scroll).toBeGreaterThan(50);
+  });
+
+  test('choosing a chip off to the side slides it into view', async ({ page }) => {
+    await freshPage(page);
+    await openScreen(page, 'transactions');
+    await page.evaluate(() => { document.querySelector('.filter-chip[data-filter="cat:other"]').click(); });
+    await expect(page.locator('.filter-chip[data-filter="cat:other"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.filter-chip[data-filter="cat:other"]')).toBeInViewport({ ratio: 1 });
+  });
+
   test('keyboard users can reach Edit and Delete', async ({ page }) => {
     await freshPage(page);
     await openScreen(page, 'transactions');

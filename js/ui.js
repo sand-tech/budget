@@ -25,6 +25,8 @@ const ICONS = {
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
+  chevronLeft: '<path d="m15 18-6-6 6-6"/>',
+  chevronRight: '<path d="m9 18 6-6-6-6"/>',
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1Z"/>',
   // Categories
   food: '<path d="M3 11h18a9 9 0 0 1-18 0Z"/><path d="M8 7.5c0-1.2 1-1.6 1-2.8M12 7.5c0-1.2 1-1.6 1-2.8M16 7.5c0-1.2 1-1.6 1-2.8"/>',
@@ -365,16 +367,115 @@ export function setFieldError(errorEl, message, inputEl) {
 
 /* ---------------- Motion ---------------- */
 export const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+export const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Animate a number from 0 to `to`, calling render(value) each frame. */
-export function countUp(to, render, duration = 700) {
-  if (reducedMotion() || to === 0) { render(to); return; }
+/** Animate a number from `from` to `to`, calling render(value) each frame. */
+export function countUp(to, render, duration = 700, from = 0) {
+  if (reducedMotion() || to === from) { render(to); return; }
   const start = performance.now();
   const step = (now) => {
     const t = Math.min(1, (now - start) / duration);
     const eased = 1 - Math.pow(1 - t, 3);
-    render(t === 1 ? to : Math.round(to * eased));
+    render(t === 1 ? to : Math.round(from + (to - from) * eased));
     if (t < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
+}
+
+/** Re-run a one-shot CSS animation class on an element. */
+export function replay(el, cls) {
+  if (!el) return;
+  el.classList.remove(cls);
+  void el.offsetWidth; // restart
+  el.classList.add(cls);
+  el.addEventListener('animationend', () => el.classList.remove(cls), { once: true });
+}
+
+/**
+ * Sliding red "thumb" behind a segmented control. The active pill also gets its
+ * own red background after the slide, so text contrast never depends on the thumb.
+ */
+export function initSegThumb(seg) {
+  const thumb = document.createElement('span');
+  thumb.className = 'seg-thumb';
+  thumb.setAttribute('aria-hidden', 'true');
+  seg.prepend(thumb);
+  const update = (animate = true) => {
+    const active = seg.querySelector('button[aria-pressed="true"], input:checked + span');
+    if (!active || !seg.offsetWidth) return;
+    const sr = seg.getBoundingClientRect();
+    const ar = active.getBoundingClientRect();
+    if (!animate || reducedMotion()) thumb.style.transition = 'none';
+    thumb.style.width = `${ar.width}px`;
+    thumb.style.height = `${ar.height}px`;
+    thumb.style.transform = `translate(${ar.left - sr.left}px, ${ar.top - sr.top}px)`;
+    if (!animate) requestAnimationFrame(() => { thumb.style.transition = ''; });
+  };
+  new MutationObserver(() => update()).observe(seg, { subtree: true, attributes: true, attributeFilter: ['aria-pressed'] });
+  seg.addEventListener('change', () => update());
+  new ResizeObserver(() => update(false)).observe(seg);
+  return update;
+}
+
+/**
+ * Horizontal chip row: native touch scrolling plus mouse drag, mouse wheel,
+ * arrow buttons (on mouse devices) and edge fades that show more is hidden.
+ */
+export function wireScrollRow(wrap) {
+  const row = wrap.querySelector('.chips-row');
+  const fades = () => {
+    const max = row.scrollWidth - row.clientWidth;
+    wrap.classList.toggle('can-left', row.scrollLeft > 2);
+    wrap.classList.toggle('can-right', row.scrollLeft < max - 2);
+  };
+  row.addEventListener('scroll', fades, { passive: true });
+  new ResizeObserver(fades).observe(row);
+  new MutationObserver(fades).observe(row, { childList: true });
+
+  // Mouse drag
+  let drag = null;
+  let moved = false;
+  row.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;
+    drag = { x: e.clientX, left: row.scrollLeft };
+    moved = false;
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (!moved && Math.abs(dx) > 5) { moved = true; row.classList.add('is-grabbing'); }
+    if (moved) row.scrollLeft = drag.left - dx;
+  });
+  window.addEventListener('pointerup', () => {
+    if (!drag) return;
+    drag = null;
+    row.classList.remove('is-grabbing');
+    setTimeout(() => { moved = false; }, 0);
+  });
+  // A drag ends with a click on a chip; don't treat it as a tap.
+  row.addEventListener('click', (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); } }, true);
+
+  // Vertical mouse wheel scrolls the row sideways while it can move.
+  row.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    const max = row.scrollWidth - row.clientWidth;
+    if ((e.deltaY > 0 && row.scrollLeft < max - 1) || (e.deltaY < 0 && row.scrollLeft > 1)) {
+      e.preventDefault();
+      row.scrollLeft += e.deltaY;
+    }
+  }, { passive: false });
+
+  wrap.querySelectorAll('.chips-arrow').forEach((b) => b.addEventListener('click', () => {
+    row.scrollBy({ left: Number(b.dataset.dir) * row.clientWidth * 0.7, behavior: reducedMotion() ? 'auto' : 'smooth' });
+  }));
+
+  return {
+    /** Bring the chosen chip into view. */
+    reveal(chip) {
+      if (!chip) return;
+      const target = chip.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2;
+      row.scrollTo({ left: Math.max(0, target), behavior: reducedMotion() ? 'auto' : 'smooth' });
+    },
+    refresh: fades,
+  };
 }

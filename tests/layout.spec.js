@@ -41,6 +41,7 @@ test.describe('layout', () => {
     await freshPage(page);
     for (const screen of SCREENS) {
       await openScreen(page, screen);
+      await page.waitForFunction(() => !document.querySelector('.screen.is-entering')); // measure after the entry animation
       const small = await page.evaluate(() => {
         const sel = 'button, a[href], input:not([type=hidden]):not(.sr-only), select, label.btn, [role=button]';
         return [...document.querySelectorAll(sel)]
