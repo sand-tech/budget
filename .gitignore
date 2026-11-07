@@ -4,3 +4,4 @@ screenshots/
 test-results/
 playwright-report/
 .claude/settings.local.json
+.claude/launch.json

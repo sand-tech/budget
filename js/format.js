@@ -64,7 +64,7 @@ export function money(cents, currency = 'PHP', opts = {}) {
 /** Short display for tight spaces: whole units, compact once it gets long. */
 export function moneyShort(cents, currency = 'PHP') {
   const whole = money(cents, currency, { whole: true });
-  return whole.replace(/[^\d]/g, '').length > 6 ? money(cents, currency, { compact: true }) : whole;
+  return Math.abs(cents) >= 10_000_000 ? money(cents, currency, { compact: true }) : whole;
 }
 
 export function currencySymbol(currency = 'PHP') {

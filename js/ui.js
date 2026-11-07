@@ -99,6 +99,86 @@ export function clear(el) {
   return el;
 }
 
+/* ---------------- Shared pieces ---------------- */
+
+/**
+ * Trend chip: arrow + signed percent. Colour shows good/bad, the arrow and
+ * the accessible label carry the meaning, so colour is never the only cue.
+ * @param {number|null} value  relative change (0.031 = 3.1%) or point delta when `points`
+ */
+export function trendChip(value, { goodWhenUp = true, suffix = '', points = false, srSuffix = suffix } = {}) {
+  const chip = (cls, visible, spoken) => h('span', { class: `chip trend ${cls}` },
+    h('span', { 'aria-hidden': 'true' }, visible),
+    h('span', { class: 'sr-only' }, spoken));
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return chip('chip-flat', `—${suffix ? ` no data${suffix.replace(/^ vs/, ' for')}` : ' n/a'}`, `No comparison available${srSuffix}`);
+  }
+  const pct = Math.abs(value * 100);
+  const num = pct >= 1000 ? '>999' : pct.toFixed(1).replace(/\.0$/, '');
+  const unit = points ? ' pts' : '%';
+  if (pct < 0.05) return chip('chip-flat', `● 0${unit}${suffix}`, `No change${srSuffix}`);
+  const up = value > 0;
+  const good = up === goodWhenUp;
+  return chip(
+    good ? 'chip-good' : 'chip-bad',
+    `${up ? '▲ +' : '▼ −'}${num}${unit}${suffix}`,
+    `${up ? 'Up' : 'Down'} ${num}${points ? ' points' : ' percent'}${srSuffix}, ${good ? 'a good sign' : 'worth a look'}`,
+  );
+}
+
+/** Icon tile for a category. */
+export function catTile(cat, type = 'expense') {
+  return h('span', { class: `tile-icon${type === 'income' ? ' is-income' : ''}`, 'aria-hidden': 'true' }, icon(cat?.icon || 'other'));
+}
+
+/**
+ * A transaction row tile.
+ * @param {object} tx
+ * @param {object} ctx { category, money, dayText, as: 'button'|'div', onClick }
+ */
+export function txTile(tx, { category, money, dayText, as = 'div', onClick }) {
+  const title = tx.note || category?.name || 'Transaction';
+  const sign = tx.type === 'income' ? '+' : '−';
+  const amountText = `${sign}${money(tx.amountCents)}`;
+  const sub = [category?.name, dayText].filter(Boolean).join(' · ');
+  const attrs = {
+    class: 'tile',
+    dataset: { id: tx.id, cents: String(tx.amountCents), type: tx.type },
+  };
+  if (as === 'button') {
+    attrs.type = 'button';
+    attrs.onclick = onClick;
+    attrs['aria-label'] = `${title}, ${category?.name ?? ''}, ${dayText}, ${tx.type === 'income' ? 'income' : 'expense'} ${money(tx.amountCents)}. Edit`;
+  }
+  return h(as, attrs,
+    catTile(category, tx.type),
+    h('span', { class: 'tile-main' },
+      h('span', { class: 'tile-title' }, title, tx.sample ? h('span', { class: 'tile-tag' }, 'Sample') : null),
+      h('span', { class: 'tile-sub' }, sub),
+    ),
+    h('span', { class: `tile-amount${tx.type === 'income' ? ' amount-in' : ''}` }, amountText),
+  );
+}
+
+export function emptyState({ iconName = 'inbox', title, text, actionLabel, onAction }) {
+  return h('div', { class: 'empty' },
+    h('div', { class: 'empty-icon', 'aria-hidden': 'true' }, icon(iconName)),
+    h('h3', {}, title),
+    text ? h('p', {}, text) : null,
+    actionLabel ? h('button', { type: 'button', class: 'btn btn-primary', onclick: onAction, dataset: { action: 'add-first' } }, icon('plus'), actionLabel) : null,
+  );
+}
+
+/** Shrink a single-line number until it fits its box (min 22px). */
+export function fitText(el, max = 32, min = 22) {
+  el.style.fontSize = '';
+  let size = max;
+  while (el.scrollWidth > el.clientWidth + 1 && size > min) {
+    size -= 2;
+    el.style.fontSize = `${size}px`;
+  }
+}
+
 /* ---------------- Motion ---------------- */
 export const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
