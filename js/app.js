@@ -767,7 +767,15 @@ function boot() {
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
   // Inter is wider than the fallback font: re-fit KPI numbers once it arrives.
   document.fonts?.ready.then(() => document.querySelectorAll('.kpi-value').forEach((el) => fitText(el)));
+  registerServiceWorker();
   document.documentElement.dataset.ready = '1';
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+  const go = () => navigator.serviceWorker.register('sw.js').catch(() => { /* offline support unavailable */ });
+  if (document.readyState === 'complete') go();
+  else window.addEventListener('load', go, { once: true });
 }
 
 boot();

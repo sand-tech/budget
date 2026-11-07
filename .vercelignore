@@ -1,0 +1,13 @@
+# Only the app itself is deployed. Dev tools and tests stay local.
+node_modules
+tests
+test-results
+playwright-report
+screenshots
+scripts
+playwright.config.js
+package.json
+package-lock.json
+serve.json
+.claude
+README.md
