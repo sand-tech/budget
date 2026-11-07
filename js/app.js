@@ -6,6 +6,7 @@ import {
 import {
   h, icon, hydrateIcons, trendChip, catTile, txTile, emptyState, fitText, countUp,
   openDialog, closeDialog, wireDialog, confirmAction, showToast, hideToast, wireToast, setFieldError,
+  wireSwipe, closeOpenRows,
 } from './ui.js';
 import { createBarChart } from './chart.js';
 
@@ -200,6 +201,122 @@ function homeEmpty(title, text) {
 }
 
 /* ====================================================================
+   Transactions
+   ==================================================================== */
+function txFilters() {
+  return [
+    { id: 'all', label: 'All' },
+    { id: 'income', label: 'Income', icon: 'trendUp' },
+    { id: 'expense', label: 'Expense', icon: 'trendDown' },
+    ...data().categories.map((c) => ({ id: `cat:${c.id}`, label: c.name, icon: c.icon })),
+  ];
+}
+
+function renderTransactions() {
+  const d = data();
+  const today = new Date();
+
+  const chips = $('tx-filters');
+  if (!chips.childElementCount) {
+    chips.replaceChildren(...txFilters().map((f) => h('button', {
+      type: 'button', class: 'filter-chip', dataset: { filter: f.id }, 'aria-pressed': 'false',
+    }, f.icon ? icon(f.icon) : null, f.label)));
+  }
+  chips.querySelectorAll('.filter-chip').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.filter === ui.txFilter)));
+
+  const search = $('tx-search');
+  if (search.value !== ui.txQuery) search.value = ui.txQuery;
+
+  const list = state.filterTx(d, { query: ui.txQuery, filter: ui.txFilter });
+  const filtered = ui.txQuery.trim() !== '' || ui.txFilter !== 'all';
+  $('tx-count').textContent = filtered ? `${list.length} result${list.length === 1 ? '' : 's'}` : '';
+
+  const root = $('tx-groups');
+  if (!list.length) {
+    root.replaceChildren(d.transactions.length === 0
+      ? emptyState({
+        title: 'No transactions yet',
+        text: 'Add your first transaction and it will show up here.',
+        actionLabel: 'Add your first transaction',
+        onAction: () => openTxSheet(),
+      })
+      : h('div', { class: 'empty card' },
+        h('div', { class: 'empty-icon', 'aria-hidden': 'true' }, icon('search')),
+        h('h3', {}, 'No matches'),
+        h('p', {}, ui.txQuery.trim() ? `Nothing matches "${ui.txQuery.trim()}".` : 'Nothing in this filter yet.'),
+        h('button', { type: 'button', class: 'btn btn-secondary', onclick: () => { ui.txQuery = ''; ui.txFilter = 'all'; renderTransactions(); } }, 'Clear search and filters')));
+    return;
+  }
+
+  const groups = new Map();
+  for (const t of list) {
+    if (!groups.has(t.date)) groups.set(t.date, []);
+    groups.get(t.date).push(t);
+  }
+  root.replaceChildren(...[...groups].map(([date, txs]) => {
+    const net = txs.reduce((s, t) => s + (t.type === 'income' ? t.amountCents : -t.amountCents), 0);
+    const headId = `g-${date}`;
+    return h('section', { class: 'tx-group', 'aria-labelledby': headId, dataset: { date } },
+      h('h2', { class: 'tx-group-head', id: headId },
+        h('span', {}, dayLabel(date, today)),
+        h('span', { class: 'tx-group-total' }, `${net > 0 ? '+' : net < 0 ? '−' : ''}${fmt(Math.abs(net))}`)),
+      h('ul', { class: 'tile-list' }, ...txs.map((tx) => h('li', {}, swipeRow(tx, today)))));
+  }));
+}
+
+function swipeRow(tx, today) {
+  const category = state.getCategory(tx.categoryId);
+  const title = tx.note || category?.name || 'transaction';
+  return h('div', { class: 'swipe', dataset: { id: tx.id } },
+    h('div', { class: 'swipe-actions' },
+      h('button', { type: 'button', class: 'swipe-btn swipe-edit', 'aria-label': `Edit ${title}`, onclick: () => openTxSheet(tx) },
+        icon('pencil'), 'Edit'),
+      h('button', { type: 'button', class: 'swipe-btn swipe-delete', 'aria-label': `Delete ${title}`, onclick: () => deleteFlow(tx) },
+        icon('trash'), 'Delete')),
+    h('div', { class: 'swipe-content' },
+      txTile(tx, { category, money: fmt, dayText: dayLabel(tx.date, today), showDay: false, as: 'button', onClick: () => openTxSheet(tx) })));
+}
+
+async function deleteFlow(tx) {
+  const category = state.getCategory(tx.categoryId);
+  const title = tx.note || category?.name || 'This transaction';
+  const ok = await confirmAction({
+    title: 'Delete transaction?',
+    text: `${title}, ${fmt(tx.amountCents)} on ${dayLabel(tx.date)}. You can undo this for 5 seconds.`,
+    okLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) {
+    closeOpenRows($('tx-groups'));
+    return;
+  }
+  const token = state.deleteTx(tx.id);
+  if (!token) return;
+  showToast('Transaction deleted', {
+    actionLabel: 'Undo',
+    duration: 5000,
+    onAction: () => {
+      if (state.restoreTx(token)) showToast('Transaction restored');
+    },
+  });
+  $('tx-search').focus({ preventScroll: true });
+}
+
+function wireTransactions() {
+  $('tx-search').addEventListener('input', (e) => {
+    ui.txQuery = e.target.value.slice(0, 100);
+    renderTransactions();
+  });
+  $('tx-filters').addEventListener('click', (e) => {
+    const b = e.target.closest('.filter-chip');
+    if (!b) return;
+    ui.txFilter = b.dataset.filter;
+    renderTransactions();
+  });
+  wireSwipe($('tx-groups'));
+}
+
+/* ====================================================================
    Add / edit transaction sheet
    ==================================================================== */
 let editing = null;
@@ -304,6 +421,7 @@ function renderNotice() {
 function renderAll() {
   renderNotice();
   renderHome();
+  renderTransactions();
 }
 
 /* ====================================================================
@@ -322,8 +440,9 @@ function wire() {
   // "View details" links can pre-set the transactions filter.
   document.addEventListener('click', (e) => {
     const a = e.target.closest('a[data-filter]');
-    if (a) { ui.txFilter = a.dataset.filter; ui.txQuery = ''; }
+    if (a) { ui.txFilter = a.dataset.filter; ui.txQuery = ''; renderTransactions(); }
   });
+  wireTransactions();
 
   $('fab').addEventListener('click', () => openTxSheet());
   wireSheet();

@@ -136,11 +136,11 @@ export function catTile(cat, type = 'expense') {
  * @param {object} tx
  * @param {object} ctx { category, money, dayText, as: 'button'|'div', onClick }
  */
-export function txTile(tx, { category, money, dayText, as = 'div', onClick }) {
+export function txTile(tx, { category, money, dayText, showDay = true, as = 'div', onClick }) {
   const title = tx.note || category?.name || 'Transaction';
   const sign = tx.type === 'income' ? '+' : '−';
   const amountText = `${sign}${money(tx.amountCents)}`;
-  const sub = [category?.name, dayText].filter(Boolean).join(' · ');
+  const sub = [category?.name, showDay ? dayText : null].filter(Boolean).join(' · ');
   const attrs = {
     class: 'tile',
     dataset: { id: tx.id, cents: String(tx.amountCents), type: tx.type },
@@ -264,6 +264,92 @@ export function wireToast() {
     const fn = toastAction;
     hideToast();
     if (fn) fn();
+  });
+}
+
+/* ---------------- Swipe rows ---------------- */
+const ACTIONS_W = 152;
+
+export function setRowOpen(row, open) {
+  const content = row.querySelector('.swipe-content');
+  row.classList.toggle('is-open', open);
+  content.style.transform = open ? `translateX(-${ACTIONS_W}px)` : '';
+}
+
+export function closeOpenRows(root, except = null) {
+  root.querySelectorAll('.swipe.is-open').forEach((r) => { if (r !== except) setRowOpen(r, false); });
+}
+
+/** Swipe left on .swipe-content to reveal .swipe-actions. Works with touch, pen and mouse. */
+export function wireSwipe(root) {
+  let drag = null;
+  let suppressClick = false;
+
+  root.addEventListener('pointerdown', (e) => {
+    const content = e.target.closest('.swipe-content');
+    if (!content || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    const row = content.closest('.swipe');
+    drag = {
+      row, content, id: e.pointerId,
+      x0: e.clientX, y0: e.clientY,
+      base: row.classList.contains('is-open') ? -ACTIONS_W : 0,
+      active: false, dx: 0,
+    };
+  });
+
+  root.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x0;
+    const dy = e.clientY - drag.y0;
+    if (!drag.active) {
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+        drag.active = true;
+        drag.row.classList.add('is-dragging');
+        try { drag.content.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+        closeOpenRows(root, drag.row);
+      } else if (Math.abs(dy) > 10) {
+        drag = null;
+        return;
+      } else return;
+    }
+    drag.dx = dx;
+    const x = Math.max(-ACTIONS_W - 28, Math.min(0, drag.base + dx));
+    drag.content.style.transform = `translateX(${x}px)`;
+  });
+
+  const end = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (drag.active) {
+      drag.row.classList.remove('is-dragging');
+      setRowOpen(drag.row, drag.base + drag.dx < -ACTIONS_W / 2);
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 300);
+    }
+    drag = null;
+  };
+  root.addEventListener('pointerup', end);
+  root.addEventListener('pointercancel', (e) => {
+    if (drag?.active) setRowOpen(drag.row, drag.base < 0);
+    drag = null;
+  });
+
+  // A swipe ends with a click on the row; swallow it.
+  root.addEventListener('click', (e) => {
+    if (suppressClick) { e.stopPropagation(); e.preventDefault(); suppressClick = false; return; }
+    // Tapping an open row closes it instead of opening the editor.
+    const content = e.target.closest('.swipe-content');
+    const row = content?.closest('.swipe');
+    if (row?.classList.contains('is-open')) { e.stopPropagation(); e.preventDefault(); setRowOpen(row, false); }
+  }, true);
+
+  // Keyboard: focusing the hidden actions reveals them.
+  root.addEventListener('focusin', (e) => {
+    const row = e.target.closest('.swipe');
+    if (e.target.closest('.swipe-actions') && row) { closeOpenRows(root, row); setRowOpen(row, true); }
+  });
+  root.addEventListener('focusout', (e) => {
+    const row = e.target.closest('.swipe');
+    if (row && !row.contains(e.relatedTarget) && e.target.closest('.swipe-actions')) setRowOpen(row, false);
   });
 }
 
