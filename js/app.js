@@ -69,7 +69,7 @@ function renderHome() {
   const k = state.kpis(d, today);
   $('greet-name').textContent = d.settings.name;
   $('avatar-initials').textContent = initials(d.settings.name);
-  $('home-subtitle').textContent = `Here's your summary for ${k.period.long}.`;
+  $('home-subtitle').textContent = `Your money in ${k.period.long}`;
   $('sample-banner').hidden = !state.hasSample(d);
   renderKpis(k);
   renderOverview();
@@ -148,7 +148,11 @@ function renderTopCategories(period) {
   const list = $('top-cats');
   const stats = state.categoryStats(data(), period).filter((r) => r.spent > 0).slice(0, 4);
   if (!stats.length) {
-    list.replaceChildren(h('li', {}, homeEmpty('No spending yet this month', 'Your top categories will show up here.')));
+    list.replaceChildren(h('li', {}, emptyState({
+      iconName: 'pie',
+      title: 'No spending yet this month',
+      text: 'Your top categories will show up here.',
+    })));
     return;
   }
   list.replaceChildren(...stats.map((r) => {
