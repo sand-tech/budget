@@ -1,5 +1,6 @@
 // Controller: boot, routing, rendering of each screen, and event wiring.
 import * as state from './state.js';
+import { requestPersistence } from './storage.js';
 import {
   money, moneyShort, percent, dayLabel, currencySymbol, centsToPlain, todayISO, fmtDate, parseAmount,
 } from './format.js';
@@ -410,6 +411,170 @@ function wireBudgets() {
 }
 
 /* ====================================================================
+   Settings
+   ==================================================================== */
+const MAX_IMPORT_BYTES = 1024 * 1024;
+const PERSIST_TEXT = {
+  true: 'Your browser has agreed to keep this data, even when storage runs low.',
+  false: 'Your browser may clear this data if the device runs low on space. Export a backup now and then.',
+  null: "This browser doesn't say whether it keeps data long term. Export a backup now and then.",
+};
+
+function applyTheme() {
+  const theme = data().settings.theme;
+  const root = document.documentElement;
+  if (theme === 'system') delete root.dataset.theme;
+  else root.dataset.theme = theme;
+  const bg = getComputedStyle(document.body).getPropertyValue('--bg').trim() || '#F3F4F6';
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', bg);
+}
+
+function renderSettings() {
+  const d = data();
+  const s = d.settings;
+  const name = $('set-name');
+  if (document.activeElement !== name) name.value = s.name;
+  $('set-currency').value = s.currency;
+  const startDay = $('set-startday');
+  if (!startDay.options.length) {
+    for (let i = 1; i <= 28; i++) startDay.append(h('option', { value: String(i) }, String(i)));
+  }
+  startDay.value = String(s.startDay);
+  document.querySelectorAll('#theme-seg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeValue === s.theme)));
+  applyTheme();
+
+  $('persist-status').textContent = PERSIST_TEXT[String(ui.persisted ?? null)];
+
+  const remind = state.needsBackupReminder(d);
+  $('backup-reminder').hidden = !remind;
+  if (remind) {
+    $('backup-reminder-text').textContent = s.lastExportAt
+      ? `Your last export was ${Math.floor((Date.now() - s.lastExportAt) / 86_400_000)} days ago. Export a CSV and keep it somewhere safe.`
+      : "You haven't exported a backup yet. Export a CSV and keep it somewhere safe.";
+  }
+
+  const sample = d.transactions.filter((t) => t.sample).length;
+  $('clear-sample-btn').disabled = sample === 0;
+  $('clear-sample-hint').textContent = sample
+    ? `Removes the ${sample} example transactions. Your own entries stay.`
+    : 'No sample data left.';
+}
+
+function exportCsv() {
+  const csv = state.exportCSV();
+  const blob = new Blob(['﻿', csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = h('a', { href: url, download: `budget-${todayISO()}.csv` });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  state.markExported();
+  const n = data().transactions.length;
+  showToast(`Exported ${n} transaction${n === 1 ? '' : 's'}`);
+}
+
+function renderImportResult(r) {
+  const box = $('import-result');
+  const parts = [];
+  if (r.fatal) {
+    parts.push(h('h3', {}, 'Nothing was imported'), h('p', { class: 'bad' }, `✕ ${r.fatal}`));
+  } else {
+    parts.push(h('h3', {}, 'Import finished'));
+    parts.push(h('p', { class: r.added ? 'ok' : '' }, `${r.added ? '✓' : '•'} Added ${r.added} transaction${r.added === 1 ? '' : 's'}.`));
+    const section = (items, cls, label) => {
+      if (!items.length) return;
+      parts.push(h('p', { class: cls }, label(items.length)));
+      const shown = items.slice(0, 50);
+      parts.push(h('ul', { dataset: { kind: cls } }, ...shown.map((x) => h('li', {}, h('b', {}, `Line ${x.line}: `), x.reason)),
+        items.length > shown.length ? h('li', {}, `…and ${items.length - shown.length} more.`) : null));
+    };
+    section(r.skipped, 'skipped', (n) => `• Skipped ${n} row${n === 1 ? '' : 's'}:`);
+    section(r.rejected, 'bad', (n) => `✕ Rejected ${n} row${n === 1 ? '' : 's'}:`);
+  }
+  box.replaceChildren(...parts);
+  box.hidden = false;
+}
+
+async function importCsv(file) {
+  if (!file) return;
+  if (file.size > MAX_IMPORT_BYTES) {
+    renderImportResult({ fatal: `This file is ${(file.size / 1024 / 1024).toFixed(1)} MB. The limit is 1 MB.`, added: 0, rejected: [], skipped: [] });
+    return;
+  }
+  let text;
+  try {
+    text = await file.text();
+  } catch {
+    renderImportResult({ fatal: "The file couldn't be read.", added: 0, rejected: [], skipped: [] });
+    return;
+  }
+  const r = state.importCSV(text);
+  renderImportResult(r);
+  if (!r.fatal && r.added) showToast(`Imported ${r.added} transaction${r.added === 1 ? '' : 's'}`);
+}
+
+function wireSettings() {
+  const name = $('set-name');
+  name.addEventListener('change', () => {
+    const v = name.value.trim();
+    if (!v) {
+      setFieldError($('set-name-error'), 'Enter a name, or keep "Friend".', name);
+      return;
+    }
+    setFieldError($('set-name-error'), '', name);
+    state.updateSettings({ name: v });
+    showToast('Name saved');
+  });
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') name.blur(); });
+  $('set-currency').addEventListener('change', (e) => { state.updateSettings({ currency: e.target.value }); });
+  $('set-startday').addEventListener('change', (e) => { state.updateSettings({ startDay: Number(e.target.value) }); });
+  $('theme-seg').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-theme-value]');
+    if (b) state.updateSettings({ theme: b.dataset.themeValue });
+  });
+
+  $('export-btn').addEventListener('click', exportCsv);
+  $('import-input').addEventListener('change', async (e) => {
+    const input = e.target;
+    await importCsv(input.files?.[0]);
+    input.value = '';
+  });
+
+  $('clear-sample-btn').addEventListener('click', async () => {
+    const ok = await confirmAction({
+      title: 'Clear sample data?',
+      text: 'This removes the example transactions. Anything you added yourself stays.',
+      okLabel: 'Clear samples',
+      danger: true,
+    });
+    if (!ok) return;
+    const n = state.clearSample();
+    showToast(`Removed ${n} sample transaction${n === 1 ? '' : 's'}`);
+  });
+
+  const resetInput = $('reset-input');
+  $('reset-btn').addEventListener('click', () => {
+    resetInput.value = '';
+    $('reset-confirm').disabled = true;
+    openDialog($('reset-dialog'));
+    resetInput.focus();
+  });
+  resetInput.addEventListener('input', () => { $('reset-confirm').disabled = resetInput.value.trim() !== 'RESET'; });
+  $('reset-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (resetInput.value.trim() !== 'RESET') return;
+    state.resetAll();
+    ui.txQuery = '';
+    ui.txFilter = 'all';
+    ui.selected = {};
+    closeDialog($('reset-dialog'));
+    $('import-result').hidden = true;
+    showToast('All data was reset');
+  });
+}
+
+/* ====================================================================
    Notifications (bell)
    ==================================================================== */
 function alerts() {
@@ -544,6 +709,7 @@ function renderAll() {
   renderHome();
   renderTransactions();
   renderBudgets();
+  renderSettings();
   renderBell();
 }
 
@@ -567,6 +733,7 @@ function wire() {
   });
   wireTransactions();
   wireBudgets();
+  wireSettings();
   $('bell-btn').addEventListener('click', () => openDialog($('notif-sheet')));
 
   $('fab').addEventListener('click', () => openTxSheet());
@@ -595,6 +762,9 @@ function boot() {
   route();
   renderAll();
   state.subscribe(renderAll);
+  requestPersistence().then((granted) => { ui.persisted = granted; renderSettings(); });
+  // Follow the system theme live when "System" is chosen.
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
   // Inter is wider than the fallback font: re-fit KPI numbers once it arrives.
   document.fonts?.ready.then(() => document.querySelectorAll('.kpi-value').forEach((el) => fitText(el)));
   document.documentElement.dataset.ready = '1';
