@@ -179,6 +179,104 @@ export function fitText(el, max = 32, min = 22) {
   }
 }
 
+/* ---------------- Dialogs and sheets ---------------- */
+
+export function openDialog(dlg) {
+  if (dlg.open) return;
+  dlg.classList.remove('is-closing');
+  dlg.returnValue = '';
+  dlg.showModal();
+}
+
+/** Close with the exit animation (skipped for reduced motion). */
+export function closeDialog(dlg, value = '') {
+  return new Promise((resolve) => {
+    if (!dlg.open) { resolve(); return; }
+    const done = () => {
+      dlg.classList.remove('is-closing');
+      if (dlg.open) dlg.close(value);
+      resolve();
+    };
+    if (reducedMotion()) { done(); return; }
+    dlg.classList.add('is-closing');
+    let finished = false;
+    const finish = () => { if (!finished) { finished = true; done(); } };
+    dlg.addEventListener('animationend', finish, { once: true });
+    setTimeout(finish, 260);
+  });
+}
+
+/** Esc, backdrop tap and [data-close] buttons all close with animation. */
+export function wireDialog(dlg) {
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); closeDialog(dlg, 'cancel'); });
+  dlg.addEventListener('click', (e) => {
+    if (e.target === dlg) {
+      const r = dlg.getBoundingClientRect();
+      const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      if (!inside) closeDialog(dlg, 'cancel');
+    }
+    if (e.target.closest('[data-close]')) closeDialog(dlg, 'cancel');
+  });
+}
+
+/** Promise<boolean> confirmation using #confirm-dialog. */
+export function confirmAction({ title, text, okLabel = 'Confirm', danger = false }) {
+  const dlg = document.getElementById('confirm-dialog');
+  const ok = document.getElementById('confirm-ok');
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-text').textContent = text;
+  ok.textContent = okLabel;
+  ok.className = `btn ${danger ? 'btn-danger-solid' : 'btn-primary'}`;
+  openDialog(dlg);
+  return new Promise((resolve) => {
+    dlg.addEventListener('close', () => resolve(dlg.returnValue === 'ok'), { once: true });
+  });
+}
+
+/* ---------------- Toast ---------------- */
+let toastTimer = null;
+let toastAction = null;
+
+export function showToast(text, { actionLabel, onAction, duration = 3000 } = {}) {
+  const el = document.getElementById('toast');
+  const btn = document.getElementById('toast-action');
+  document.getElementById('toast-text').textContent = text;
+  clearTimeout(toastTimer);
+  toastAction = onAction || null;
+  btn.hidden = !actionLabel;
+  if (actionLabel) btn.textContent = actionLabel;
+  el.hidden = false;
+  // restart the entrance animation
+  el.style.animation = 'none';
+  void el.offsetWidth;
+  el.style.animation = '';
+  toastTimer = setTimeout(hideToast, duration);
+}
+
+export function hideToast() {
+  clearTimeout(toastTimer);
+  toastAction = null;
+  document.getElementById('toast').hidden = true;
+}
+
+export function wireToast() {
+  document.getElementById('toast-action').addEventListener('click', () => {
+    const fn = toastAction;
+    hideToast();
+    if (fn) fn();
+  });
+}
+
+/* ---------------- Field errors ---------------- */
+export function setFieldError(errorEl, message, inputEl) {
+  errorEl.textContent = message || '';
+  errorEl.hidden = !message;
+  if (inputEl) {
+    if (message) inputEl.setAttribute('aria-invalid', 'true');
+    else inputEl.removeAttribute('aria-invalid');
+  }
+}
+
 /* ---------------- Motion ---------------- */
 export const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 

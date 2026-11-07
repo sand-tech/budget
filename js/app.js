@@ -1,8 +1,11 @@
 // Controller: boot, routing, rendering of each screen, and event wiring.
 import * as state from './state.js';
-import { money, moneyShort, percent, dayLabel } from './format.js';
+import {
+  money, moneyShort, percent, dayLabel, currencySymbol, centsToPlain, todayISO,
+} from './format.js';
 import {
   h, icon, hydrateIcons, trendChip, catTile, txTile, emptyState, fitText, countUp,
+  openDialog, closeDialog, wireDialog, confirmAction, showToast, hideToast, wireToast, setFieldError,
 } from './ui.js';
 import { createBarChart } from './chart.js';
 
@@ -197,9 +200,91 @@ function homeEmpty(title, text) {
 }
 
 /* ====================================================================
-   Placeholders for later steps
+   Add / edit transaction sheet
    ==================================================================== */
-function openTxSheet() {}
+let editing = null;
+
+function sheetType() {
+  return $('tx-form').querySelector('input[name="type"]:checked')?.value || 'expense';
+}
+
+function renderCatGrid(type, selectedId) {
+  const grid = $('tx-cat-grid');
+  const cats = state.categoriesFor(type);
+  grid.replaceChildren(...cats.map((cat) => h('label', { class: 'cat-option' },
+    h('input', { type: 'radio', name: 'category', value: cat.id, checked: cat.id === selectedId }),
+    h('span', { class: 'cat-tile' }, catTile(cat, type), cat.name))));
+}
+
+function clearSheetErrors() {
+  setFieldError($('tx-amount-error'), '', $('tx-amount'));
+  setFieldError($('tx-category-error'), '');
+  setFieldError($('tx-date-error'), '', $('tx-date'));
+  setFieldError($('tx-note-error'), '', $('tx-note'));
+}
+
+function openTxSheet(tx = null) {
+  editing = tx;
+  const form = $('tx-form');
+  form.reset();
+  const type = tx ? tx.type : 'expense';
+  form.querySelector(`input[name="type"][value="${type}"]`).checked = true;
+  $('sheet-title').textContent = tx ? 'Edit transaction' : 'Add transaction';
+  $('tx-save').textContent = tx ? 'Save changes' : 'Save transaction';
+  $('tx-currency').textContent = currencySymbol(currency());
+  $('tx-amount').value = tx ? centsToPlain(tx.amountCents) : '';
+  $('tx-date').value = tx ? tx.date : todayISO();
+  $('tx-note').value = tx ? tx.note : '';
+  renderCatGrid(type, tx?.categoryId);
+  clearSheetErrors();
+  openDialog($('tx-sheet'));
+  $('tx-amount').focus({ preventScroll: true });
+}
+
+function submitTx(e) {
+  e.preventDefault();
+  const form = $('tx-form');
+  const input = {
+    type: sheetType(),
+    amount: $('tx-amount').value,
+    categoryId: form.querySelector('input[name="category"]:checked')?.value || '',
+    date: $('tx-date').value,
+    note: $('tx-note').value,
+  };
+  const r = editing ? state.updateTx(editing.id, input) : state.addTx(input);
+  if (!r.ok) {
+    const er = r.errors;
+    setFieldError($('tx-amount-error'), er.amount, $('tx-amount'));
+    setFieldError($('tx-category-error'), er.category);
+    setFieldError($('tx-date-error'), er.date, $('tx-date'));
+    setFieldError($('tx-note-error'), er.note, $('tx-note'));
+    const first = er.amount ? $('tx-amount')
+      : er.category ? form.querySelector('input[name="category"]')
+        : er.date ? $('tx-date') : $('tx-note');
+    first?.focus();
+    return;
+  }
+  const wasEditing = !!editing;
+  editing = null;
+  closeDialog($('tx-sheet'));
+  showToast(wasEditing ? 'Transaction updated' : 'Transaction added');
+}
+
+function wireSheet() {
+  const form = $('tx-form');
+  wireDialog($('tx-sheet'));
+  form.addEventListener('submit', submitTx);
+  form.addEventListener('change', (e) => {
+    if (e.target.name === 'type') {
+      const keep = form.querySelector('input[name="category"]:checked')?.value;
+      renderCatGrid(e.target.value, keep);
+    }
+    if (e.target.name === 'category') setFieldError($('tx-category-error'), '');
+  });
+  $('tx-amount').addEventListener('input', () => setFieldError($('tx-amount-error'), '', $('tx-amount')));
+  $('tx-date').addEventListener('input', () => setFieldError($('tx-date-error'), '', $('tx-date')));
+  $('tx-note').addEventListener('input', () => setFieldError($('tx-note-error'), '', $('tx-note')));
+}
 
 /* ====================================================================
    Notices + render loop
@@ -241,6 +326,14 @@ function wire() {
   });
 
   $('fab').addEventListener('click', () => openTxSheet());
+  wireSheet();
+  wireToast();
+  for (const id of ['confirm-dialog', 'reset-dialog', 'budget-dialog', 'notif-sheet']) wireDialog($(id));
+  // Confirm dialog: animate out instead of closing instantly.
+  $('confirm-dialog').querySelector('form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    closeDialog($('confirm-dialog'), e.submitter?.value || 'cancel');
+  });
 }
 
 /* ====================================================================
