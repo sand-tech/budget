@@ -67,6 +67,7 @@ test.describe('transactions screen', () => {
     await freshPage(page);
     const balance = await kpiValue(page, 'balance');
     const expenses = await kpiValue(page, 'expenses');
+    const foodBudget = Number(await page.locator('.budget-card[data-cat="food"]').getAttribute('data-spent'));
     await openScreen(page, 'transactions');
     const row = await firstRowWith(page, 'Coffee'); // 165.00, today
     await swipeLeft(page, row);
@@ -76,6 +77,7 @@ test.describe('transactions screen', () => {
     await page.locator('#tx-amount').fill('200');
     await page.locator('#tx-save').click();
     await expect(page.locator('#toast')).toContainText('updated');
+    await expect(page.locator('.budget-card[data-cat="food"]')).toHaveAttribute('data-spent', String(foodBudget + 3500));
     await openScreen(page, 'home');
     await expect(page.locator('[data-kpi="balance"] .kpi-value')).toHaveAttribute('data-value', String(balance - 3500));
     await expect(page.locator('[data-kpi="expenses"] .kpi-value')).toHaveAttribute('data-value', String(expenses + 3500));
@@ -110,6 +112,7 @@ test.describe('transactions screen', () => {
     expect((await readState(page)).transactions.length).toBe(count - 1);
     await expect(page.locator('#tx-groups .swipe', { hasText: 'Coffee' })).toHaveCount(0);
 
+    await expect(page.locator('.budget-card[data-cat="food"]')).toHaveAttribute('data-spent', String(food - 16500));
     await openScreen(page, 'home');
     await expect(page.locator('[data-kpi="balance"] .kpi-value')).toHaveAttribute('data-value', String(balance + 16500));
     await expect(page.locator('#overview-total')).toHaveAttribute('data-cents', String(overview - 16500));

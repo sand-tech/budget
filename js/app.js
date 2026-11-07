@@ -1,7 +1,7 @@
 // Controller: boot, routing, rendering of each screen, and event wiring.
 import * as state from './state.js';
 import {
-  money, moneyShort, percent, dayLabel, currencySymbol, centsToPlain, todayISO,
+  money, moneyShort, percent, dayLabel, currencySymbol, centsToPlain, todayISO, fmtDate, parseAmount,
 } from './format.js';
 import {
   h, icon, hydrateIcons, trendChip, catTile, txTile, emptyState, fitText, countUp,
@@ -317,6 +317,127 @@ function wireTransactions() {
 }
 
 /* ====================================================================
+   Budgets
+   ==================================================================== */
+function levelChip(level, ratio) {
+  if (level === 'over') return h('span', { class: 'chip chip-over' }, h('span', { 'aria-hidden': 'true' }, '▲ '), 'Over budget');
+  if (level === 'warn') return h('span', { class: 'chip chip-warn' }, h('span', { 'aria-hidden': 'true' }, '⚠ '), `${Math.floor(ratio * 100)}% used`);
+  return null;
+}
+
+function progressBar(label, spent, limit) {
+  const pct = limit ? (spent / limit) * 100 : 0;
+  const fill = h('div', { class: `progress-fill${pct > 100 ? ' is-over' : ''}` });
+  fill.style.width = `${Math.min(100, pct)}%`;
+  return h('div', {
+    class: 'progress', role: 'progressbar', 'aria-label': label,
+    'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': Math.min(100, Math.round(pct)),
+    'aria-valuetext': `${Math.round(pct)}% used, ${fmt(spent)} of ${fmt(limit)}`,
+  }, fill);
+}
+
+function renderBudgets() {
+  const d = data();
+  const period = state.periodAt('month', new Date(), d.settings.startDay);
+  $('budgets-period').textContent = `${period.long} · Resets on ${fmtDate(period.endDate, { month: 'short', day: 'numeric' })}`;
+  const rows = state.categoryStats(d, period)
+    .filter((r) => r.limit)
+    .map((r) => ({ ...r, ...state.budgetLevel(r.spent, r.limit) }))
+    .sort((a, b) => b.ratio - a.ratio || a.cat.name.localeCompare(b.cat.name));
+
+  const totalLimit = rows.reduce((s, r) => s + r.limit, 0);
+  const totalSpent = rows.reduce((s, r) => s + r.spent, 0);
+  const left = totalLimit - totalSpent;
+  const overCount = rows.filter((r) => r.level === 'over').length;
+  $('budget-summary').replaceChildren(
+    h('div', { class: 'bs-row' },
+      h('div', {}, h('p', { class: 'bs-label' }, 'Spent'), h('p', { class: 'bs-value', dataset: { cents: String(totalSpent) } }, fmt(totalSpent))),
+      h('div', {}, h('p', { class: 'bs-label' }, 'Budget'), h('p', { class: 'bs-value' }, fmt(totalLimit))),
+      h('div', {}, h('p', { class: 'bs-label' }, left < 0 ? 'Over by' : 'Left'), h('p', { class: 'bs-value' }, fmt(Math.abs(left))))),
+    progressBar('All budgets used', totalSpent, totalLimit),
+    h('p', { class: 'hint' }, overCount
+      ? `${overCount} categor${overCount === 1 ? 'y is' : 'ies are'} over budget.`
+      : 'Tap "Edit limit" on any card to change its monthly budget.'),
+  );
+
+  $('budget-list').replaceChildren(...rows.map((r) => {
+    const remaining = r.limit - r.spent;
+    return h('article', { class: 'card budget-card', dataset: { cat: r.cat.id, level: r.level, spent: String(r.spent), remaining: String(remaining) }, 'aria-labelledby': `bc-${r.cat.id}` },
+      h('div', { class: 'bc-head' },
+        catTile(r.cat),
+        h('div', { class: 'bc-title' },
+          h('h2', { class: 'bc-name', id: `bc-${r.cat.id}` }, r.cat.name),
+          h('p', { class: 'bc-sub' }, `${r.count} transaction${r.count === 1 ? '' : 's'} this month`)),
+        levelChip(r.level, r.ratio)),
+      progressBar(`${r.cat.name} budget used`, r.spent, r.limit),
+      h('dl', { class: 'bc-amounts' },
+        h('div', {}, h('dt', {}, 'Limit'), h('dd', {}, fmt(r.limit))),
+        h('div', {}, h('dt', {}, 'Spent'), h('dd', {}, fmt(r.spent))),
+        h('div', {}, h('dt', {}, remaining < 0 ? 'Over by' : 'Remaining'),
+          h('dd', { class: remaining < 0 ? 'is-over' : '' }, fmt(Math.abs(remaining))))),
+      h('div', { class: 'bc-foot' },
+        h('p', { class: 'hint' }, `${Math.round(r.ratio * 100)}% used`),
+        h('button', { type: 'button', class: 'btn btn-secondary bc-edit', 'aria-label': `Edit ${r.cat.name} limit`, onclick: () => openBudgetDialog(r.cat) },
+          icon('pencil'), 'Edit limit')));
+  }));
+}
+
+let budgetCat = null;
+function openBudgetDialog(cat) {
+  budgetCat = cat;
+  $('budget-dialog-title').textContent = `${cat.name} budget`;
+  $('budget-currency').textContent = currencySymbol(currency());
+  $('budget-input').value = centsToPlain(data().budgets[cat.id] ?? 0);
+  setFieldError($('budget-input-error'), '', $('budget-input'));
+  openDialog($('budget-dialog'));
+  $('budget-input').select();
+}
+
+function wireBudgets() {
+  $('budget-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const r = parseAmount($('budget-input').value);
+    if (!r.ok) {
+      setFieldError($('budget-input-error'), r.error, $('budget-input'));
+      $('budget-input').focus();
+      return;
+    }
+    state.setBudget(budgetCat.id, r.cents);
+    closeDialog($('budget-dialog'));
+    showToast(`${budgetCat.name} budget updated`);
+  });
+  $('budget-input').addEventListener('input', () => setFieldError($('budget-input-error'), '', $('budget-input')));
+}
+
+/* ====================================================================
+   Notifications (bell)
+   ==================================================================== */
+function alerts() {
+  const d = data();
+  const period = state.periodAt('month', new Date(), d.settings.startDay);
+  const out = [];
+  for (const r of state.categoryStats(d, period)) {
+    if (!r.limit) continue;
+    const { level, ratio } = state.budgetLevel(r.spent, r.limit);
+    if (level === 'over') out.push({ icon: 'alert', title: `${r.cat.name} is over budget`, text: `${fmt(r.spent)} spent of ${fmt(r.limit)}.`, href: '#budgets' });
+    else if (level === 'warn') out.push({ icon: r.cat.icon, title: `${r.cat.name} is at ${Math.floor(ratio * 100)}%`, text: `${fmt(r.limit - r.spent)} left this month.`, href: '#budgets' });
+  }
+  if (state.needsBackupReminder(d)) out.push({ icon: 'download', title: 'Back up your data', text: 'Export a CSV from Settings.', href: '#settings' });
+  return out;
+}
+
+function renderBell() {
+  const list = alerts();
+  $('bell-dot').hidden = list.length === 0;
+  $('bell-btn').setAttribute('aria-label', list.length ? `Notifications, ${list.length} new` : 'Notifications, none');
+  $('notif-list').replaceChildren(...(list.length
+    ? list.map((a) => h('li', {}, h('a', { class: 'tile', href: a.href, onclick: () => closeDialog($('notif-sheet')) },
+      h('span', { class: 'tile-icon', 'aria-hidden': 'true' }, icon(a.icon)),
+      h('span', { class: 'tile-main' }, h('span', { class: 'tile-title' }, a.title), h('span', { class: 'tile-sub' }, a.text)))))
+    : [h('li', {}, emptyState({ iconName: 'check', title: "You're all caught up", text: 'Budget warnings and reminders will show up here.' }))]));
+}
+
+/* ====================================================================
    Add / edit transaction sheet
    ==================================================================== */
 let editing = null;
@@ -422,6 +543,8 @@ function renderAll() {
   renderNotice();
   renderHome();
   renderTransactions();
+  renderBudgets();
+  renderBell();
 }
 
 /* ====================================================================
@@ -443,6 +566,8 @@ function wire() {
     if (a) { ui.txFilter = a.dataset.filter; ui.txQuery = ''; renderTransactions(); }
   });
   wireTransactions();
+  wireBudgets();
+  $('bell-btn').addEventListener('click', () => openDialog($('notif-sheet')));
 
   $('fab').addEventListener('click', () => openTxSheet());
   wireSheet();

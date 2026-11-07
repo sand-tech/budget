@@ -42,6 +42,8 @@ test.describe('add transaction sheet', () => {
     await expect(kpi(page, 'expenses')).toHaveAttribute('data-value', String(expenses + 12345));
     await expect(page.locator('#overview-total')).toHaveAttribute('data-cents', String(overview + 12345));
     await expect.poll(() => foodCents(page)).toBe(food + 12345);
+    await expect(page.locator('.budget-card[data-cat="food"]')).toHaveAttribute('data-spent', String(food + 12345));
+    await expect(page.locator('#chart .chart-hit').last()).toHaveAttribute('aria-label', new RegExp(`expenses ₱${((overview + 12345) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`));
     await expect(page.locator('#recent-list .tile').first()).toContainText('Test lunch');
 
     const s = await readState(page);

@@ -625,7 +625,7 @@ button.tile:active { transform: scale(0.99); }
 .budget-summary .bs-label { font-size: 13px; color: var(--text-2); font-weight: 500; }
 .budget-summary .bs-row { display: flex; justify-content: space-between; gap: 12px; }
 .budget-summary .bs-row > div { min-width: 0; }
-.budget-summary .bs-value { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.budget-summary .bs-value { font-size: 16px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .budget-list { display: flex; flex-direction: column; gap: var(--gap); }
 .budget-card .bc-head { display: flex; align-items: center; gap: 12px; }
 .budget-card .bc-title { flex: 1; min-width: 0; }
