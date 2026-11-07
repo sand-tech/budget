@@ -1,0 +1,22 @@
+{
+  "name": "budget-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal budget tracker for your phone. Plain HTML, CSS and JavaScript. All data stays on the device.",
+  "type": "module",
+  "scripts": {
+    "start": "serve -n -l tcp://127.0.0.1:3000 .",
+    "start:lan": "serve -n -l tcp://0.0.0.0:3000 .",
+    "setup": "node scripts/pw.mjs install chromium",
+    "test": "node scripts/pw.mjs test",
+    "screenshots": "node scripts/pw.mjs test tests/screenshots.spec.js",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "serve": "14.2.7"
+  },
+  "overrides": {
+    "compression": "1.8.2"
+  }
+}

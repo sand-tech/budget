@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($c = Get-Command git -ErrorAction SilentlyContinue; if \\($c\\) { $c.Source } else { foreach \\($p in 'C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe','C:\\\\Program Files \\(x86\\)\\\\Git\\\\cmd\\\\git.exe',\"$env:LOCALAPPDATA\\\\Programs\\\\Git\\\\cmd\\\\git.exe\"\\) { if \\(Test-Path $p\\) { $p } } })",
+      "PowerShell($c = Get-Command git -ErrorAction SilentlyContinue; if \\($c\\) { $c.Source; git --version } else { foreach \\($p in 'C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe','C:\\\\Program Files \\(x86\\)\\\\Git\\\\cmd\\\\git.exe',\"$env:LOCALAPPDATA\\\\Programs\\\\Git\\\\cmd\\\\git.exe\"\\) { if \\(Test-Path $p\\) { $p; & $p --version } } }; git config --global user.name; git config --global user.email)",
+      "PowerShell($cands = @\\(\"$env:USERPROFILE\\\\scoop\\\\shims\\\\git.exe\",\"$env:LOCALAPPDATA\\\\GitHubDesktop\",\"D:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe\",\"D:\\\\Git\\\\cmd\\\\git.exe\",\"C:\\\\Git\\\\cmd\\\\git.exe\"\\); foreach \\($p in $cands\\) { if \\(Test-Path $p\\) { \"FOUND: $p\" } }; try { Get-ItemProperty 'HKLM:\\\\SOFTWARE\\\\GitForWindows' -ErrorAction Stop | Select-Object InstallPath, CurrentVersion } catch { 'No GitForWindows registry key \\(HKLM\\)' }; try { Get-ItemProperty 'HKCU:\\\\SOFTWARE\\\\GitForWindows' -ErrorAction Stop | Select-Object InstallPath, CurrentVersion } catch { 'No GitForWindows registry key \\(HKCU\\)' })",
+      "PowerShell($m = [Environment]::GetEnvironmentVariable\\('Path','Machine'\\); $u = [Environment]::GetEnvironmentVariable\\('Path','User'\\); $env:Path = \"$m;$u\"; $c = Get-Command git -ErrorAction SilentlyContinue; if \\($c\\) { $c.Source; git --version } else { 'git still not found' })",
+      "PowerShell($git = 'C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe'; \"name: $\\(& $git config --global user.name\\)\"; \"email: $\\(& $git config --global user.email\\)\")",
+      "PowerShell($g = 'C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe'; & $g init -b main; & $g config user.name \"Budget App\"; & $g config user.email \"budget@localhost\"; & $g config --list --local)",
+      "PowerShell(npm install --save-dev --save-exact serve @playwright/test 2>&1)",
+      "PowerShell(npm audit 2>&1)",
+      "PowerShell(npm run setup 2>&1)",
+      "PowerShell(npm install 2>&1)",
+      "PowerShell(npm ls compression 2>&1)",
+      "PowerShell(npm test 2>&1)",
+      "PowerShell($g = 'C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe'; & $g add -A; & $g commit -q -m \"Layout shell, design tokens and tooling\" -m \"Phone-width column with safe areas, bottom tab bar, floating add button, sheet and dialog markup, light/dark tokens. Playwright \\(browsers kept in node_modules\\) and serve pinned as exact devDependencies; serve bound to 127.0.0.1; compression overridden to 1.8.2 \\(npm audit clean\\). First tests: no horizontal overflow, tab switching, 44px targets.\"; & $g log --oneline)"
+    ]
+  }
+}
