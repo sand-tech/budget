@@ -117,8 +117,20 @@
           <h1 id="budgets-title">Budgets</h1>
           <p class="subtitle" id="budgets-period">This month</p>
         </header>
-        <article class="card budget-summary" id="budget-summary"></article>
+        <div id="budget-summary"></div>
+        <button type="button" class="new-budget" id="new-budget-btn">
+          <span class="tile-icon" aria-hidden="true"><span class="ico" data-icon="plus"></span></span>
+          <span class="tile-main">
+            <span class="tile-title">New budget</span>
+            <span class="tile-sub">Rent, gym, travel… track anything</span>
+          </span>
+        </button>
         <div class="budget-list" id="budget-list"></div>
+        <section class="card untracked" id="untracked" aria-labelledby="untracked-title" hidden>
+          <h2 id="untracked-title" class="group-title">Not tracked</h2>
+          <p class="hint">These categories have no limit. Add one to see them here.</p>
+          <ul class="tile-list" id="untracked-list"></ul>
+        </section>
       </section>
 
       <!-- SETTINGS -->
@@ -289,22 +301,50 @@
     </form>
   </dialog>
 
-  <!-- BUDGET LIMIT DIALOG -->
-  <dialog class="dialog" id="budget-dialog" aria-labelledby="budget-dialog-title">
-    <form class="dialog-body" id="budget-form" novalidate>
-      <h2 id="budget-dialog-title">Edit budget</h2>
+  <!-- NEW / EDIT BUDGET SHEET -->
+  <dialog class="sheet" id="budget-sheet" aria-labelledby="budget-sheet-title">
+    <form id="budget-form" class="sheet-body" novalidate>
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <div class="budget-preview">
+          <span class="tile-icon" id="budget-preview-icon" aria-hidden="true"></span>
+          <h2 id="budget-sheet-title">New budget</h2>
+        </div>
+        <button type="button" class="icon-btn round small" data-close aria-label="Close"><span class="ico" data-icon="x"></span></button>
+      </div>
+
       <div class="field">
-        <label for="budget-input">Monthly limit</label>
+        <label for="budget-name">Name</label>
+        <input id="budget-name" name="name" type="text" maxlength="24" autocomplete="off" placeholder="e.g. Rent, Gym, Travel" aria-describedby="budget-name-error">
+        <p class="field-error" id="budget-name-error" hidden></p>
+      </div>
+
+      <fieldset class="field" aria-describedby="budget-icon-error">
+        <legend>Icon</legend>
+        <div class="icon-grid" id="budget-icon-grid"></div>
+        <p class="field-error" id="budget-icon-error" hidden></p>
+      </fieldset>
+
+      <div class="field">
+        <label for="budget-input">Limit</label>
         <div class="amount-wrap amount-wrap-sm">
           <span class="amount-currency" id="budget-currency" aria-hidden="true">₱</span>
-          <input id="budget-input" type="text" inputmode="decimal" autocomplete="off" aria-describedby="budget-input-error">
+          <input id="budget-input" name="limit" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-describedby="budget-input-error">
         </div>
         <p class="field-error" id="budget-input-error" hidden></p>
       </div>
-      <div class="dialog-actions">
-        <button type="button" class="btn btn-secondary" data-close>Cancel</button>
-        <button type="submit" class="btn btn-primary">Save</button>
-      </div>
+
+      <fieldset class="field" aria-describedby="budget-period-hint">
+        <legend>Resets</legend>
+        <div class="seg seg-full">
+          <label class="seg-radio"><input type="radio" name="period" value="week"><span>Weekly</span></label>
+          <label class="seg-radio"><input type="radio" name="period" value="month" checked><span>Monthly</span></label>
+        </div>
+        <p class="hint" id="budget-period-hint"></p>
+      </fieldset>
+
+      <button type="submit" class="btn btn-primary btn-block" id="budget-save">Create budget</button>
+      <button type="button" class="btn btn-danger btn-block" id="budget-remove" hidden>Delete budget</button>
     </form>
   </dialog>
 

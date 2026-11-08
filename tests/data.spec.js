@@ -40,7 +40,8 @@ test.describe('data layer', () => {
   test('first launch seeds about 30 sample transactions over 3 months', async ({ page }) => {
     await freshPage(page);
     const s = await readState(page);
-    expect(s.schemaVersion).toBe(1);
+    expect(s.schemaVersion).toBe(2);
+    expect(s.budgets.food).toEqual({ limit: 900000, period: 'month' });
     expect(s.settings.currency).toBe('PHP');
     expect(s.transactions.length).toBeGreaterThanOrEqual(25);
     expect(s.transactions.length).toBeLessThanOrEqual(35);
@@ -71,8 +72,30 @@ test.describe('data layer', () => {
     const keys = await page.evaluate(() => Object.keys(localStorage));
     expect(keys.some((k) => k.startsWith('budget.v1.unreadable-'))).toBe(true);
     const s = await readState(page);
-    expect(s.schemaVersion).toBe(1);
+    expect(s.schemaVersion).toBe(2);
     expect(s.transactions).toEqual([]);
+  });
+
+  test('upgrades version 1 data (plain monthly limits) to version 2', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate((key) => {
+      localStorage.clear();
+      localStorage.setItem(key, JSON.stringify({
+        schemaVersion: 1,
+        settings: { name: 'Ana', currency: 'PHP', startDay: 1, theme: 'system' },
+        categories: [{ id: 'food', name: 'Food', icon: 'food', kind: 'expense' }],
+        budgets: { food: 123400, transport: 5000, salary: 999 },
+        transactions: [{ id: 'keep-1', type: 'expense', amountCents: 500, categoryId: 'food', date: '2026-01-05', note: 'kept', createdAt: 1 }],
+      }));
+    }, STORAGE_KEY);
+    await page.reload();
+    await page.waitForFunction(() => document.documentElement.dataset.ready === '1');
+    const s = await readState(page);
+    expect(s.schemaVersion).toBe(2);
+    expect(s.budgets).toEqual({ food: { limit: 123400, period: 'month' }, transport: { limit: 5000, period: 'month' } });
+    expect(s.categories.map((c) => c.id)).toEqual(expect.arrayContaining(['food', 'transport', 'salary', 'other']));
+    expect(s.transactions.map((t) => t.id)).toEqual(['keep-1']);
+    expect(s.settings.name).toBe('Ana');
   });
 
   test('invalid stored transactions are dropped during load', async ({ page }) => {

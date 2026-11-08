@@ -5,13 +5,24 @@ import {
   NOTE_MAX, MAX_CENTS, CSV_COLUMNS, parseCSV, unescapeFormula, toCSV,
 } from './format.js';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const CURRENCIES = ['PHP', 'USD', 'EUR', 'GBP', 'SGD', 'AUD', 'CAD', 'HKD', 'INR'];
 export const THEMES = ['system', 'light', 'dark'];
 export const NAME_MAX = 30;
 export const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 export const MAX_IMPORT_ROWS = 10_000;
 export const BACKUP_REMINDER_DAYS = 30;
+
+/** Budgets: each tracked category has a limit that resets weekly or monthly. */
+export const BUDGET_PERIODS = ['week', 'month'];
+export const CATEGORY_NAME_MAX = 24;
+export const MAX_CATEGORIES = 40;
+/** Icons offered when creating a budget (names from ui.js). */
+export const BUDGET_ICONS = [
+  'tag', 'home', 'food', 'coffee', 'shopping', 'bills', 'transport', 'car',
+  'health', 'dumbbell', 'entertainment', 'music', 'phone', 'school', 'book', 'plane',
+  'gift', 'paw', 'savings', 'star', 'other',
+];
 
 /** kind: which transaction types may use the category. */
 export const DEFAULT_CATEGORIES = [
@@ -26,8 +37,8 @@ export const DEFAULT_CATEGORIES = [
   { id: 'other', name: 'Other', icon: 'other', kind: 'both' },
 ];
 
-/** Monthly limits in cents. */
-export const DEFAULT_BUDGETS = {
+/** Starting monthly limits in cents (users can change, remove or add their own). */
+export const DEFAULT_LIMITS = {
   food: 900_000,
   transport: 300_000,
   bills: 650_000,
@@ -105,19 +116,59 @@ export function sampleTransactions(today = new Date()) {
   }));
 }
 
+export function newCategoryId() {
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return `c_${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
+export const defaultBudgets = () => Object.fromEntries(
+  Object.entries(DEFAULT_LIMITS).map(([id, limit]) => [id, { limit, period: 'month' }]),
+);
+
 export function freshState({ seed = false, today = new Date() } = {}) {
   return {
     schemaVersion: SCHEMA_VERSION,
     settings: { ...DEFAULT_SETTINGS },
     categories: DEFAULT_CATEGORIES.map((c) => ({ ...c })),
-    budgets: { ...DEFAULT_BUDGETS },
+    budgets: defaultBudgets(),
     transactions: seed ? sampleTransactions(today) : [],
   };
 }
 
-// Future upgrades go here, keyed by the version they upgrade FROM:
-// 1: (d) => ({ ...d, schemaVersion: 2, newField: ... }),
-const MIGRATIONS = {};
+// Upgrades, keyed by the version they upgrade FROM.
+const MIGRATIONS = {
+  // v1 stored a plain monthly limit per category; v2 stores { limit, period }.
+  1: (d) => ({
+    ...d,
+    schemaVersion: 2,
+    budgets: Object.fromEntries(Object.entries(d.budgets && typeof d.budgets === 'object' ? d.budgets : DEFAULT_LIMITS)
+      .map(([id, v]) => [id, { limit: v, period: 'month' }])),
+  }),
+};
+
+/** Tidy a user-typed category name: trim, collapse spaces, drop control characters. */
+export function cleanCategoryName(name) {
+  return String(name ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function cleanCategory(c) {
+  if (!c || typeof c !== 'object' || typeof c.id !== 'string' || !ID_RE.test(c.id)) return null;
+  const name = cleanCategoryName(c.name);
+  if (!name || name.length > CATEGORY_NAME_MAX) return null;
+  if (!['expense', 'income', 'both'].includes(c.kind)) return null;
+  const builtIn = DEFAULT_CATEGORIES.find((x) => x.id === c.id);
+  const icon = typeof c.icon === 'string' && (BUDGET_ICONS.includes(c.icon) || c.icon === builtIn?.icon) ? c.icon : 'tag';
+  const out = { id: c.id, name, icon, kind: builtIn ? builtIn.kind : c.kind };
+  if (!builtIn) out.custom = true;
+  return out;
+}
+
+function cleanBudget(b) {
+  if (!b || typeof b !== 'object') return null;
+  if (!Number.isSafeInteger(b.limit) || b.limit <= 0 || b.limit > MAX_CENTS) return null;
+  return { limit: b.limit, period: BUDGET_PERIODS.includes(b.period) ? b.period : 'month' };
+}
 
 function cleanSettings(s = {}) {
   const out = { ...DEFAULT_SETTINGS };
@@ -160,12 +211,30 @@ export function migrate(raw) {
     if (!step) return null;
     d = step(d);
   }
-  const categories = DEFAULT_CATEGORIES.map((c) => ({ ...c }));
+  // Keep the user's categories (renamed built-ins, custom budgets) and make
+  // sure every built-in still exists.
+  const categories = [];
+  const names = new Set();
+  for (const raw of Array.isArray(d.categories) ? d.categories : []) {
+    const c = cleanCategory(raw);
+    if (!c || categories.some((x) => x.id === c.id) || names.has(c.name.toLowerCase())) continue;
+    if (categories.length >= MAX_CATEGORIES) break;
+    categories.push(c);
+    names.add(c.name.toLowerCase());
+  }
+  for (const def of DEFAULT_CATEGORIES) {
+    if (categories.some((c) => c.id === def.id)) continue;
+    const c = { ...def };
+    if (names.has(c.name.toLowerCase())) c.name = `${c.name} (built-in)`;
+    categories.push(c);
+    names.add(c.name.toLowerCase());
+  }
   const budgets = {};
-  const rawBudgets = d.budgets && typeof d.budgets === 'object' ? d.budgets : DEFAULT_BUDGETS;
+  const rawBudgets = d.budgets && typeof d.budgets === 'object' ? d.budgets : defaultBudgets();
   for (const c of categories) {
-    const v = rawBudgets[c.id];
-    if (Number.isSafeInteger(v) && v > 0 && v <= MAX_CENTS) budgets[c.id] = v;
+    if (c.kind === 'income') continue;
+    const b = cleanBudget(rawBudgets[c.id]);
+    if (b) budgets[c.id] = b;
   }
   const seen = new Set();
   const transactions = [];
@@ -232,8 +301,14 @@ export function storageProblem() {
 
 export const getCategory = (id, d = data) => d.categories.find((c) => c.id === id);
 export const kindAllows = (cat, type) => cat.kind === 'both' || cat.kind === type;
-export const categoriesFor = (type, d = data) => d.categories.filter((c) => kindAllows(c, type));
-export const budgetCategories = (d = data) => d.categories.filter((c) => c.kind !== 'income');
+/** Categories in display order: built-ins and your own, with "Other" last. */
+export const orderedCategories = (d = data) => [
+  ...d.categories.filter((c) => c.id !== 'other'),
+  ...d.categories.filter((c) => c.id === 'other'),
+];
+export const categoriesFor = (type, d = data) => orderedCategories(d).filter((c) => kindAllows(c, type));
+export const budgetCategories = (d = data) => orderedCategories(d).filter((c) => c.kind !== 'income');
+export const isBuiltIn = (cat) => DEFAULT_CATEGORIES.some((x) => x.id === cat.id);
 export const hasSample = (d = data) => d.transactions.some((t) => t.sample);
 
 /* ---------------- Validation ---------------- */
@@ -304,12 +379,71 @@ export function updateSettings(patch) {
   return next;
 }
 
-export function setBudget(categoryId, cents) {
-  if (!getCategory(categoryId) || !Number.isSafeInteger(cents) || cents <= 0 || cents > MAX_CENTS) return false;
-  data.budgets[categoryId] = cents;
+/**
+ * Validate a budget form. input: { categoryId?, name, icon, limit (string), period }
+ * Leave categoryId empty to create a new budget (and its category).
+ */
+export function validateBudget(input, d = data) {
+  const errors = {};
+  const existing = input.categoryId ? getCategory(input.categoryId, d) : null;
+  if (input.categoryId && (!existing || existing.kind === 'income')) errors.name = 'This budget no longer exists.';
+  const name = cleanCategoryName(input.name);
+  if (!name) errors.name = 'Give your budget a name.';
+  else if (name.length > CATEGORY_NAME_MAX) errors.name = `Keep the name under ${CATEGORY_NAME_MAX} characters.`;
+  else if (d.categories.some((c) => c.id !== existing?.id && c.name.toLowerCase() === name.toLowerCase())) {
+    errors.name = `You already have a category called "${name}".`;
+  }
+  if (!existing && d.categories.length >= MAX_CATEGORIES) errors.name = `You can have up to ${MAX_CATEGORIES} categories.`;
+  const builtInIcon = existing && DEFAULT_CATEGORIES.find((x) => x.id === existing.id)?.icon;
+  if (!BUDGET_ICONS.includes(input.icon) && input.icon !== builtInIcon) errors.icon = 'Choose an icon.';
+  const amt = parseAmount(input.limit);
+  if (!amt.ok) errors.limit = amt.error;
+  if (!BUDGET_PERIODS.includes(input.period)) errors.period = 'Choose weekly or monthly.';
+  if (Object.keys(errors).length) return { ok: false, errors };
+  return { ok: true, value: { existing, name, icon: input.icon, limit: amt.cents, period: input.period } };
+}
+
+/** Create or update a budget. New budgets become expense categories you can pick when adding transactions. */
+export function saveBudget(input) {
+  const v = validateBudget(input);
+  if (!v.ok) return v;
+  const { existing, name, icon, limit, period } = v.value;
+  let category = existing;
+  if (category) {
+    category.name = name;
+    category.icon = icon;
+  } else {
+    category = { id: newCategoryId(), name, icon, kind: 'expense', custom: true };
+    data.categories.push(category);
+  }
+  data.budgets[category.id] = { limit, period };
+  commit({ type: existing ? 'budget' : 'budget-add', categoryId: category.id });
+  return { ok: true, category, created: !existing };
+}
+
+/** Stop tracking a limit; the category itself stays. */
+export function removeBudget(categoryId) {
+  if (!data.budgets[categoryId]) return false;
+  delete data.budgets[categoryId];
   commit({ type: 'budget' });
   return true;
 }
+
+/** Delete one of your own categories. Its transactions move to "Other". Returns how many moved. */
+export function deleteCategory(categoryId) {
+  const cat = getCategory(categoryId);
+  if (!cat || isBuiltIn(cat)) return null;
+  let moved = 0;
+  for (const t of data.transactions) {
+    if (t.categoryId === categoryId) { t.categoryId = 'other'; moved++; }
+  }
+  data.categories = data.categories.filter((c) => c.id !== categoryId);
+  delete data.budgets[categoryId];
+  commit({ type: 'category-delete', categoryId });
+  return moved;
+}
+
+export const transactionCount = (categoryId, d = data) => d.transactions.filter((t) => t.categoryId === categoryId).length;
 
 export function clearSample() {
   const before = data.transactions.length;
@@ -465,12 +599,7 @@ export function series(d = data, mode = 'month', today = new Date()) {
 
 /** Spending per non-income category within a period, highest first. */
 export function categoryStats(d = data, period) {
-  const rows = budgetCategories(d).map((cat) => ({
-    cat,
-    spent: 0,
-    count: 0,
-    limit: d.budgets[cat.id] ?? null,
-  }));
+  const rows = budgetCategories(d).map((cat) => ({ cat, spent: 0, count: 0 }));
   for (const t of d.transactions) {
     if (t.type !== 'expense' || t.date < period.start || t.date >= period.end) continue;
     const r = rows.find((x) => x.cat.id === t.categoryId);
@@ -485,6 +614,32 @@ export function budgetLevel(spent, limit) {
   const ratio = spent / limit;
   return { ratio, level: ratio > 1 ? 'over' : ratio >= 0.8 ? 'warn' : 'ok' };
 }
+
+/**
+ * One row per tracked budget, each measured over its own period
+ * (this week from Monday, or this month from the month start day).
+ */
+export function budgetRows(d = data, today = new Date()) {
+  const rows = [];
+  for (const cat of budgetCategories(d)) {
+    const b = d.budgets[cat.id];
+    if (!b) continue;
+    const period = periodAt(b.period, today, d.settings.startDay);
+    let spent = 0;
+    let count = 0;
+    for (const t of d.transactions) {
+      if (t.type === 'expense' && t.categoryId === cat.id && t.date >= period.start && t.date < period.end) {
+        spent += t.amountCents;
+        count++;
+      }
+    }
+    rows.push({ cat, limit: b.limit, period: b.period, range: period, spent, count, ...budgetLevel(spent, b.limit) });
+  }
+  return rows;
+}
+
+/** Non-income categories that don't have a budget right now. */
+export const untrackedCategories = (d = data) => budgetCategories(d).filter((c) => !d.budgets[c.id]);
 
 /** Newest first. */
 export function sortedTx(txs) {

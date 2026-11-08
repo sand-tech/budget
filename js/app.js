@@ -2,7 +2,7 @@
 import * as state from './state.js';
 import { requestPersistence } from './storage.js';
 import {
-  money, moneyShort, percent, dayLabel, currencySymbol, centsToPlain, todayISO, fmtDate, parseAmount,
+  money, moneyShort, percent, dayLabel, currencySymbol, centsToPlain, todayISO, fmtDate,
 } from './format.js';
 import {
   h, icon, hydrateIcons, trendChip, catTile, txTile, emptyState, fitText, countUp,
@@ -179,17 +179,21 @@ function renderTopCategories(period) {
     })));
     return;
   }
+  // The bar shows the category's budget, measured over that budget's own period.
+  const budgets = new Map(state.budgetRows(data(), new Date()).map((b) => [b.cat.id, b]));
   list.replaceChildren(...stats.map((r) => {
-    const pct = r.limit ? (r.spent / r.limit) * 100 : 0;
+    const b = budgets.get(r.cat.id);
+    const pct = b ? b.ratio * 100 : 0;
+    const per = b ? (b.period === 'week' ? ' of weekly' : '') : '';
     let bar = null;
-    if (r.limit) {
+    if (b) {
       const fill = h('div', { class: `mini-bar-fill${pct > 100 ? ' is-over' : ''}` });
       fill.style.width = `${Math.min(100, pct)}%`;
       bar = h('div', {
         class: 'mini-bar', role: 'progressbar',
         'aria-label': `${r.cat.name} budget used`,
         'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': Math.min(100, Math.round(pct)),
-        'aria-valuetext': `${Math.round(pct)}% of ${fmt(r.limit)}`,
+        'aria-valuetext': `${Math.round(pct)}% of ${fmt(b.limit)} ${b.period === 'week' ? 'this week' : 'this month'}`,
       }, fill);
     }
     return h('li', {},
@@ -197,7 +201,7 @@ function renderTopCategories(period) {
         catTile(r.cat),
         h('span', { class: 'tile-main' },
           h('span', { class: 'tile-title' }, r.cat.name),
-          h('span', { class: 'tile-sub' }, `${r.count} transaction${r.count === 1 ? '' : 's'}${r.limit ? ` · ${Math.round(pct)}%` : ''}`),
+          h('span', { class: 'tile-sub' }, `${r.count} transaction${r.count === 1 ? '' : 's'}${b ? ` · ${Math.round(pct)}%${per}` : ''}`),
           bar),
         h('span', { class: 'tile-amount' }, fmt(r.spent))));
   }));
@@ -237,7 +241,7 @@ function txFilters() {
     { id: 'all', label: 'All' },
     { id: 'income', label: 'Income', icon: 'trendUp' },
     { id: 'expense', label: 'Expense', icon: 'trendDown' },
-    ...data().categories.map((c) => ({ id: `cat:${c.id}`, label: c.name, icon: c.icon })),
+    ...state.orderedCategories().map((c) => ({ id: `cat:${c.id}`, label: c.name, icon: c.icon })),
   ];
 }
 
@@ -246,8 +250,13 @@ function renderTransactions() {
   const today = new Date();
 
   const chips = $('tx-filters');
-  if (!chips.childElementCount) {
-    chips.replaceChildren(...txFilters().map((f) => h('button', {
+  // Rebuild the chips whenever categories are added, renamed or deleted.
+  const filters = txFilters();
+  const sig = filters.map((f) => `${f.id}:${f.label}:${f.icon ?? ''}`).join('|');
+  if (chips.dataset.sig !== sig) {
+    chips.dataset.sig = sig;
+    if (!filters.some((f) => f.id === ui.txFilter)) ui.txFilter = 'all';
+    chips.replaceChildren(...filters.map((f) => h('button', {
       type: 'button', class: 'filter-chip', dataset: { filter: f.id }, 'aria-pressed': 'false',
     }, f.icon ? icon(f.icon) : null, f.label)));
   }
@@ -378,78 +387,207 @@ function progressBar(label, spent, limit) {
   }, fill);
 }
 
+const PERIOD_WORD = { week: 'Weekly', month: 'Monthly' };
+const PERIOD_NOUN = { week: 'week', month: 'month' };
+
+function resetText(range, period) {
+  const opts = period === 'week' ? { weekday: 'short', month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric' };
+  return `Resets ${fmtDate(range.endDate, opts)}`;
+}
+
 function renderBudgets() {
   const d = data();
-  const period = state.periodAt('month', new Date(), d.settings.startDay);
-  $('budgets-period').textContent = `${period.long} · Resets on ${fmtDate(period.endDate, { month: 'short', day: 'numeric' })}`;
-  const rows = state.categoryStats(d, period)
-    .filter((r) => r.limit)
-    .map((r) => ({ ...r, ...state.budgetLevel(r.spent, r.limit) }))
+  const today = new Date();
+  const month = state.periodAt('month', today, d.settings.startDay);
+  const rows = state.budgetRows(d, today)
     .sort((a, b) => b.ratio - a.ratio || a.cat.name.localeCompare(b.cat.name));
+  $('budgets-period').textContent = month.long;
 
-  const totalLimit = rows.reduce((s, r) => s + r.limit, 0);
-  const totalSpent = rows.reduce((s, r) => s + r.spent, 0);
-  const left = totalLimit - totalSpent;
-  const overCount = rows.filter((r) => r.level === 'over').length;
-  $('budget-summary').replaceChildren(
-    h('div', { class: 'bs-row' },
-      h('div', {}, h('p', { class: 'bs-label' }, 'Spent'), h('p', { class: 'bs-value', dataset: { cents: String(totalSpent) } }, fmt(totalSpent))),
-      h('div', {}, h('p', { class: 'bs-label' }, 'Budget'), h('p', { class: 'bs-value' }, fmt(totalLimit))),
-      h('div', {}, h('p', { class: 'bs-label' }, left < 0 ? 'Over by' : 'Left'), h('p', { class: 'bs-value' }, fmt(Math.abs(left))))),
-    progressBar('All budgets used', totalSpent, totalLimit),
-    h('p', { class: 'hint' }, overCount
-      ? `${overCount} categor${overCount === 1 ? 'y is' : 'ies are'} over budget.`
-      : 'Tap "Edit limit" on any card to change its monthly budget.'),
-  );
+  // Summary: one block per period in use (this month / this week).
+  const summary = $('budget-summary');
+  if (!rows.length) {
+    summary.replaceChildren(h('article', { class: 'card' }, emptyState({
+      iconName: 'pie',
+      title: 'No budgets yet',
+      text: 'Create a budget for anything you want to keep an eye on, weekly or monthly.',
+    })));
+  } else {
+    const blocks = ['month', 'week'].map((p) => {
+      const group = rows.filter((r) => r.period === p);
+      if (!group.length) return null;
+      const limit = group.reduce((s, r) => s + r.limit, 0);
+      const spent = group.reduce((s, r) => s + r.spent, 0);
+      const left = limit - spent;
+      return h('div', { class: 'bs-block', dataset: { period: p } },
+        h('p', { class: 'bs-title' }, p === 'week' ? 'This week' : 'This month',
+          h('span', { class: 'bs-count' }, ` · ${group.length} budget${group.length === 1 ? '' : 's'}`)),
+        h('div', { class: 'bs-row' },
+          h('div', {}, h('p', { class: 'bs-label' }, 'Spent'), h('p', { class: 'bs-value', dataset: { cents: String(spent) } }, fmt(spent))),
+          h('div', {}, h('p', { class: 'bs-label' }, 'Budget'), h('p', { class: 'bs-value' }, fmt(limit))),
+          h('div', {}, h('p', { class: 'bs-label' }, left < 0 ? 'Over by' : 'Left'), h('p', { class: 'bs-value' }, fmt(Math.abs(left))))),
+        progressBar(`${p === 'week' ? 'Weekly' : 'Monthly'} budgets used`, spent, limit));
+    });
+    const over = rows.filter((r) => r.level === 'over').length;
+    summary.replaceChildren(h('article', { class: 'card budget-summary' },
+      ...blocks,
+      h('p', { class: 'hint' }, over
+        ? `${over} budget${over === 1 ? ' is' : 's are'} over the limit.`
+        : 'Tap Edit on a card to rename it, change its limit or how often it resets.')));
+  }
 
   $('budget-list').replaceChildren(...rows.map((r) => {
     const remaining = r.limit - r.spent;
-    return h('article', { class: 'card budget-card', dataset: { cat: r.cat.id, level: r.level, spent: String(r.spent), remaining: String(remaining) }, 'aria-labelledby': `bc-${r.cat.id}` },
-      h('div', { class: 'bc-head' },
-        catTile(r.cat),
-        h('div', { class: 'bc-title' },
-          h('h2', { class: 'bc-name', id: `bc-${r.cat.id}` }, r.cat.name),
-          h('p', { class: 'bc-sub' }, `${r.count} transaction${r.count === 1 ? '' : 's'} this month`)),
-        levelChip(r.level, r.ratio)),
-      progressBar(`${r.cat.name} budget used`, r.spent, r.limit),
-      h('dl', { class: 'bc-amounts' },
-        h('div', {}, h('dt', {}, 'Limit'), h('dd', {}, fmt(r.limit))),
-        h('div', {}, h('dt', {}, 'Spent'), h('dd', {}, fmt(r.spent))),
-        h('div', {}, h('dt', {}, remaining < 0 ? 'Over by' : 'Remaining'),
-          h('dd', { class: remaining < 0 ? 'is-over' : '' }, fmt(Math.abs(remaining))))),
-      h('div', { class: 'bc-foot' },
-        h('p', { class: 'hint' }, `${Math.round(r.ratio * 100)}% used`),
-        h('button', { type: 'button', class: 'btn btn-secondary bc-edit', 'aria-label': `Edit ${r.cat.name} limit`, onclick: () => openBudgetDialog(r.cat) },
-          icon('pencil'), 'Edit limit')));
+    return h('article', {
+      class: `card budget-card${r.cat.id === ui.highlightBudget ? ' is-new' : ''}`,
+      dataset: { cat: r.cat.id, level: r.level, period: r.period, spent: String(r.spent), remaining: String(remaining) },
+      'aria-labelledby': `bc-${r.cat.id}`,
+    },
+    h('div', { class: 'bc-head' },
+      catTile(r.cat),
+      h('div', { class: 'bc-title' },
+        h('h2', { class: 'bc-name', id: `bc-${r.cat.id}` }, r.cat.name),
+        h('p', { class: 'bc-sub' }, `${PERIOD_WORD[r.period]} · ${r.count} transaction${r.count === 1 ? '' : 's'} this ${PERIOD_NOUN[r.period]}`)),
+      levelChip(r.level, r.ratio)),
+    progressBar(`${r.cat.name} budget used`, r.spent, r.limit),
+    h('dl', { class: 'bc-amounts' },
+      h('div', {}, h('dt', {}, 'Limit'), h('dd', {}, fmt(r.limit))),
+      h('div', {}, h('dt', {}, 'Spent'), h('dd', {}, fmt(r.spent))),
+      h('div', {}, h('dt', {}, remaining < 0 ? 'Over by' : 'Remaining'),
+        h('dd', { class: remaining < 0 ? 'is-over' : '' }, fmt(Math.abs(remaining))))),
+    h('div', { class: 'bc-foot' },
+      h('p', { class: 'hint' }, `${Math.round(r.ratio * 100)}% used · ${resetText(r.range, r.period)}`),
+      h('button', { type: 'button', class: 'btn btn-secondary bc-edit', 'aria-label': `Edit ${r.cat.name} budget`, onclick: () => openBudgetSheet(r.cat) },
+        icon('pencil'), 'Edit')));
   }));
+
+  // Categories without a limit, so you can start tracking them again.
+  const untracked = state.untrackedCategories(d);
+  $('untracked').hidden = untracked.length === 0;
+  $('untracked-list').replaceChildren(...untracked.map((cat) => h('li', {},
+    h('div', { class: 'tile', dataset: { cat: cat.id } },
+      catTile(cat),
+      h('span', { class: 'tile-main' },
+        h('span', { class: 'tile-title' }, cat.name),
+        h('span', { class: 'tile-sub' }, 'No limit')),
+      h('button', { type: 'button', class: 'btn btn-secondary btn-small', 'aria-label': `Add a limit for ${cat.name}`, onclick: () => openBudgetSheet(cat) }, 'Add limit')))));
 }
 
-let budgetCat = null;
-function openBudgetDialog(cat) {
-  budgetCat = cat;
-  $('budget-dialog-title').textContent = `${cat.name} budget`;
-  $('budget-currency').textContent = currencySymbol(currency());
-  $('budget-input').value = centsToPlain(data().budgets[cat.id] ?? 0);
+/* ---------------- Budget sheet (create / edit) ---------------- */
+let budgetEditing = null;
+
+function renderIconGrid(selected, extraIcon) {
+  const icons = [...state.BUDGET_ICONS];
+  if (extraIcon && !icons.includes(extraIcon)) icons.unshift(extraIcon);
+  $('budget-icon-grid').replaceChildren(...icons.map((name) => h('label', { class: 'icon-option', title: name },
+    h('input', { type: 'radio', name: 'icon', value: name, checked: name === selected, 'aria-label': `${name} icon` }),
+    h('span', { class: 'icon-tile' }, icon(name)))));
+}
+
+function updateBudgetPreview() {
+  const chosen = $('budget-form').querySelector('input[name="icon"]:checked')?.value || 'tag';
+  $('budget-preview-icon').replaceChildren(icon(chosen));
+  const period = $('budget-form').querySelector('input[name="period"]:checked')?.value || 'month';
+  $('budget-period-hint').textContent = period === 'week'
+    ? 'Starts fresh every Monday.'
+    : `Starts fresh on day ${data().settings.startDay} of each month. You can change that day in Settings.`;
+}
+
+function clearBudgetErrors() {
+  setFieldError($('budget-name-error'), '', $('budget-name'));
+  setFieldError($('budget-icon-error'), '');
   setFieldError($('budget-input-error'), '', $('budget-input'));
-  openDialog($('budget-dialog'));
-  $('budget-input').select();
+}
+
+function openBudgetSheet(cat = null) {
+  budgetEditing = cat;
+  const form = $('budget-form');
+  form.reset();
+  const b = cat ? data().budgets[cat.id] : null;
+  const builtIn = cat ? state.isBuiltIn(cat) : false;
+  $('budget-sheet-title').textContent = !cat ? 'New budget' : b ? `Edit ${cat.name}` : `Track ${cat.name}`;
+  $('budget-save').textContent = !cat ? 'Create budget' : 'Save budget';
+  $('budget-name').value = cat ? cat.name : '';
+  const builtInIcon = builtIn ? state.DEFAULT_CATEGORIES.find((x) => x.id === cat.id).icon : null;
+  renderIconGrid(cat ? cat.icon : 'tag', builtInIcon);
+  $('budget-input').value = b ? centsToPlain(b.limit) : '';
+  form.querySelector(`input[name="period"][value="${b?.period ?? 'month'}"]`).checked = true;
+  $('budget-currency').textContent = currencySymbol(currency());
+  // Your own budgets can be deleted; built-in categories can only stop being tracked.
+  const remove = $('budget-remove');
+  remove.hidden = !cat || (builtIn && !b);
+  remove.textContent = builtIn ? 'Stop tracking' : 'Delete budget';
+  clearBudgetErrors();
+  updateBudgetPreview();
+  openDialog($('budget-sheet'));
+  (cat ? $('budget-input') : $('budget-name')).focus({ preventScroll: true });
+}
+
+function submitBudget(e) {
+  e.preventDefault();
+  const form = $('budget-form');
+  const r = state.saveBudget({
+    categoryId: budgetEditing?.id,
+    name: $('budget-name').value,
+    icon: form.querySelector('input[name="icon"]:checked')?.value || '',
+    limit: $('budget-input').value,
+    period: form.querySelector('input[name="period"]:checked')?.value || '',
+  });
+  if (!r.ok) {
+    const er = r.errors;
+    setFieldError($('budget-name-error'), er.name, $('budget-name'));
+    setFieldError($('budget-icon-error'), er.icon);
+    setFieldError($('budget-input-error'), er.limit, $('budget-input'));
+    if (er.limit) replay(form.querySelector('.amount-wrap'), 'is-shaking');
+    if (er.name) replay($('budget-name'), 'is-shaking');
+    (er.name ? $('budget-name') : er.icon ? form.querySelector('input[name="icon"]') : $('budget-input')).focus();
+    return;
+  }
+  budgetEditing = null;
+  closeDialog($('budget-sheet'));
+  showToast(r.created ? `${r.category.name} budget created` : `${r.category.name} budget updated`);
+}
+
+async function removeBudgetFlow() {
+  const cat = budgetEditing;
+  if (!cat) return;
+  if (state.isBuiltIn(cat)) {
+    const previous = { ...data().budgets[cat.id] };
+    await closeDialog($('budget-sheet'));
+    state.removeBudget(cat.id);
+    showToast(`${cat.name} is no longer tracked`, {
+      actionLabel: 'Undo',
+      duration: 5000,
+      onAction: () => state.saveBudget({ categoryId: cat.id, name: cat.name, icon: cat.icon, limit: centsToPlain(previous.limit), period: previous.period }),
+    });
+    return;
+  }
+  const n = state.transactionCount(cat.id);
+  const ok = await confirmAction({
+    title: `Delete ${cat.name}?`,
+    text: n
+      ? `The budget is removed and its ${n} transaction${n === 1 ? '' : 's'} move${n === 1 ? 's' : ''} to Other. This can't be undone.`
+      : 'The budget and its category are removed. This can\'t be undone.',
+    okLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
+  await closeDialog($('budget-sheet'));
+  state.deleteCategory(cat.id);
+  budgetEditing = null;
+  showToast(`${cat.name} deleted`);
 }
 
 function wireBudgets() {
-  $('budget-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const r = parseAmount($('budget-input').value);
-    if (!r.ok) {
-      setFieldError($('budget-input-error'), r.error, $('budget-input'));
-      replay($('budget-form').querySelector('.amount-wrap'), 'is-shaking');
-      $('budget-input').focus();
-      return;
-    }
-    state.setBudget(budgetCat.id, r.cents);
-    closeDialog($('budget-dialog'));
-    showToast(`${budgetCat.name} budget updated`);
+  wireDialog($('budget-sheet'));
+  $('new-budget-btn').addEventListener('click', () => openBudgetSheet());
+  $('budget-form').addEventListener('submit', submitBudget);
+  $('budget-form').addEventListener('change', (e) => {
+    if (e.target.name === 'icon') { setFieldError($('budget-icon-error'), ''); updateBudgetPreview(); }
+    if (e.target.name === 'period') updateBudgetPreview();
   });
+  $('budget-name').addEventListener('input', () => setFieldError($('budget-name-error'), '', $('budget-name')));
   $('budget-input').addEventListener('input', () => setFieldError($('budget-input-error'), '', $('budget-input')));
+  $('budget-remove').addEventListener('click', removeBudgetFlow);
 }
 
 /* ====================================================================
@@ -625,13 +763,11 @@ function wireSettings() {
    ==================================================================== */
 function alerts() {
   const d = data();
-  const period = state.periodAt('month', new Date(), d.settings.startDay);
   const out = [];
-  for (const r of state.categoryStats(d, period)) {
-    if (!r.limit) continue;
-    const { level, ratio } = state.budgetLevel(r.spent, r.limit);
-    if (level === 'over') out.push({ icon: 'alert', title: `${r.cat.name} is over budget`, text: `${fmt(r.spent)} spent of ${fmt(r.limit)}.`, href: '#budgets' });
-    else if (level === 'warn') out.push({ icon: r.cat.icon, title: `${r.cat.name} is at ${Math.floor(ratio * 100)}%`, text: `${fmt(r.limit - r.spent)} left this month.`, href: '#budgets' });
+  for (const r of state.budgetRows(d, new Date())) {
+    const span = `this ${PERIOD_NOUN[r.period]}`;
+    if (r.level === 'over') out.push({ icon: 'alert', title: `${r.cat.name} is over budget`, text: `${fmt(r.spent)} spent of ${fmt(r.limit)} ${span}.`, href: '#budgets' });
+    else if (r.level === 'warn') out.push({ icon: r.cat.icon, title: `${r.cat.name} is at ${Math.floor(r.ratio * 100)}%`, text: `${fmt(r.limit - r.spent)} left ${span}.`, href: '#budgets' });
   }
   if (state.needsBackupReminder(d)) out.push({ icon: 'download', title: 'Back up your data', text: 'Export a CSV from Settings.', href: '#settings' });
   return out;
@@ -757,6 +893,7 @@ function renderNotice() {
 function renderAll(change) {
   // Flash the row that was just added, edited or restored.
   ui.highlightId = change && ['add', 'update', 'restore'].includes(change.type) ? change.tx.id : null;
+  ui.highlightBudget = change && ['budget', 'budget-add'].includes(change.type) ? change.categoryId : null;
   renderNotice();
   renderHome();
   renderTransactions();
@@ -792,7 +929,7 @@ function wire() {
   $('fab').addEventListener('click', () => openTxSheet());
   wireSheet();
   wireToast();
-  for (const id of ['confirm-dialog', 'reset-dialog', 'budget-dialog', 'notif-sheet']) wireDialog($(id));
+  for (const id of ['confirm-dialog', 'reset-dialog', 'notif-sheet']) wireDialog($(id));
   // Confirm dialog: animate out instead of closing instantly.
   $('confirm-dialog').querySelector('form').addEventListener('submit', (e) => {
     e.preventDefault();

@@ -2,7 +2,7 @@
 // Same-origin files: served from cache, refreshed in the background
 // (stale-while-revalidate), so a new deploy shows up on the next launch.
 // Bump VERSION to force a clean re-download of everything.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL_CACHE = `budget-shell-${VERSION}`;
 const FONT_CACHE = 'budget-fonts-v1';
 
